@@ -41,8 +41,6 @@ from mixminion.Packet import MBOX_TYPE, SMTP_TYPE, DROP_TYPE, FRAGMENT_TYPE, \
 from mixminion.ThreadUtils import RWLock, DummyLock
 
 # FFFF This should be made configurable and adjustable.
-MIXMINION_DIRECTORY_URL = "http://mixminion.net/directory/Directory.gz"
-MIXMINION_DIRECTORY_FINGERPRINT = "CD80DD1B8BE7CA2E13C928D57499992D56579CCD"
 DEFAULT_REQUIRED_LIFETIME = 1
 
 class DirectoryDownloadError(UIError):
@@ -336,7 +334,7 @@ class DirectoryBackedDescriptorSource(DescriptorSource):
     # timeout: How long do we wait when trying to download?  A number
     #   of seconds, or None.
     MAGIC = "BDBS-0.1"
-    def __init__(self, state):
+    def __init__(self, state, config):
         """Create a new DirectoryBackedDescriptorSource"""
         DescriptorSource.__init__(self)
         self._setSharedState(state)
@@ -376,6 +374,7 @@ class DirectoryBackedDescriptorSource(DescriptorSource):
             self.timeout = int(timeout)
         else:
             self.timeout = None
+        self.config = config
 
     def rescan(self, force=0):
         if not self.fnameBase:
@@ -414,7 +413,7 @@ class DirectoryBackedDescriptorSource(DescriptorSource):
         if now is None:
             now = time.time()
         if url is None:
-            url = MIXMINION_DIRECTORY_URL
+            url = self.config['DirectoryServers']['ServerURL']
 
         if (self.serverDir is None or forceDownload or
             self.lastDownload < previousMidnight(now)):
@@ -422,12 +421,14 @@ class DirectoryBackedDescriptorSource(DescriptorSource):
         else:
             LOG.debug("Directory is up to date.")
 
-    def downloadDirectory(self, url=MIXMINION_DIRECTORY_URL,
+    def downloadDirectory(self, url=None,
                           lock=None):
         """Fetch a new directory."""
         if self.__downloading:
             LOG.info("Download already in progress")
             return
+        if url is None:
+            url = self.config['DirectoryServers']['ServerURL']
         self.__downloading = 1
         self._downloadDirectoryImpl(url,lock)
         self.__downloading = 0
@@ -529,7 +530,7 @@ class DirectoryBackedDescriptorSource(DescriptorSource):
 
         if isinstance(directory, mixminion.ServerInfo.ServerDirectory):
             identity = directory['Signature']['DirectoryIdentity']
-            fp = MIXMINION_DIRECTORY_FINGERPRINT #XXXX
+            fp = self.config['DirectoryServers']['Fingerprint']
             if fp and mixminion.Crypto.pk_fingerprint(identity) != fp:
                 raise MixFatalError("Bad identity key on directory")
         else:
@@ -700,7 +701,7 @@ def loadCachingDescriptorSource(config):
 
     state = _DescriptorSourceSharedState()
     store = CachingDescriptorSource(state)
-    store.addBase(DirectoryBackedDescriptorSource(state))
+    store.addBase(DirectoryBackedDescriptorSource(state, config))
     if not isServer:
         store.addBase(FSBackedDescriptorSource(state))
     store.configure(config)

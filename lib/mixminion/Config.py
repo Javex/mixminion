@@ -983,7 +983,8 @@ class ClientConfig(_ConfigFile):
                    },
         'DirectoryServers' :
                    { '__SECTION__' : ('ALLOW', None, None),
-                     'ServerURL' : ('ALLOW*', None, None),
+                     'ServerURL' : ('ALLOW', None, "http://mixminion.net/directory/Directory.gz"),
+                     'Fingerprint': ('ALLOW', None, "CD80DD1B8BE7CA2E13C928D57499992D56579CCD"),
                      'MaxSkew' : ('ALLOW', "interval", "10 minutes"),
                      'DirectoryTimeout' : ('ALLOW', "interval", "1 minute"),
                      'AllowOldDirectoryFormat': ("ALLOW", 'boolean', 'true') },
