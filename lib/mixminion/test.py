@@ -6641,8 +6641,8 @@ class ClientDirectoryTests(TestCase):
 
         # Replace the real URL and fingerprint with the ones we have; for
         # unit testing purposes, we can't rely on an http server.
-        mixminion.ClientDirectory.MIXMINION_DIRECTORY_URL = fileURL(fname)
-        mixminion.ClientDirectory.MIXMINION_DIRECTORY_FINGERPRINT = fingerprint
+        config['DirectoryServers']['ServerURL'] = fileURL(fname)
+        config['DirectoryServers']['Fingerprint'] = fingerprint
 
         # Reload the directory.
         ks.updateDirectory(now=now)
@@ -6678,7 +6678,7 @@ class ClientDirectoryTests(TestCase):
             [os.path.join(impdirname, s) for s in
              ("Fred1", "Fred2", "Lola2", "Alice0", "Alice1",
               "Bob3", "Bob4", "Lisa1", "Lisa2") ], identity)
-        mixminion.ClientDirectory.MIXMINION_DIRECTORY_URL = fileURL(fname)
+        config['DirectoryServers']['ServerURL'] = fileURL(fname)
         ks.updateDirectory(forceDownload=1)
         # Previous entries.
         self.assertSameSD(ks.getServerInfo("Alice"), edesc["Alice"][0])
@@ -7069,15 +7069,15 @@ class ClientDirectoryTests(TestCase):
                 f.close()
         return d
 
-    def loadDirectory(self, direc, d, now=None):
+    def loadDirectory(self, direc, d, config, now=None):
         identity = getRSAKey(0,2048)
         fingerprint = Crypto.pk_fingerprint(identity)
         fname = getDirectory(
             [os.path.join(d, s) for s in
              ("Fred1", "Fred2", "Lola2", "Alice0", "Alice1",
               "Bob3", "Bob4", "Lisa1", "Lisa2") ], identity)
-        mixminion.ClientDirectory.MIXMINION_DIRECTORY_URL = fileURL(fname)
-        mixminion.ClientDirectory.MIXMINION_DIRECTORY_FINGERPRINT = fingerprint
+        config['DirectoryServers']['ServerURL'] = fileURL(fname)
+        config['DirectoryServers']['Fingerprint'] = fingerprint
         direc.updateDirectory(now=now)
 
     def assertSameSD(self, s1, s2):

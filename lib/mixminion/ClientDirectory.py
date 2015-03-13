@@ -38,8 +38,6 @@ from mixminion.Packet import MBOX_TYPE, SMTP_TYPE, DROP_TYPE, FRAGMENT_TYPE, \
 from mixminion.ThreadUtils import RWLock
 
 # FFFF This should be made configurable and adjustable.
-MIXMINION_DIRECTORY_URL = "http://mixminion.net/directory/Directory.gz"
-MIXMINION_DIRECTORY_FINGERPRINT = "CD80DD1B8BE7CA2E13C928D57499992D56579CCD"
 
 #XXXX This class has become unwieldy.  It should get refactored into:
 #XXXX "abstract server set", "directory-based server set", "disk-backed server
@@ -172,7 +170,7 @@ class ClientDirectory:
     def _downloadDirectory(self, timeout=None):
         """Helper: implements downloadDirectory but doesn't hold lock."""
         # Start downloading the directory.
-        url = MIXMINION_DIRECTORY_URL
+        url = self.config['DirectoryServers']['ServerURL']
         LOG.info("Downloading directory from %s", url)
 
         # XXXX Refactor download logic.
@@ -233,7 +231,7 @@ class ClientDirectory:
 
         # Make sure that the identity is as expected.
         identity = directory['Signature']['DirectoryIdentity']
-        fp = MIXMINION_DIRECTORY_FINGERPRINT
+        fp = self.config['DirectoryServers']['Fingerprint']
         if fp and mixminion.Crypto.pk_fingerprint(identity) != fp:
             raise MixFatalError("Bad identity key on directory")
 
