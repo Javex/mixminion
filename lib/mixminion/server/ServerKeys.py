@@ -49,10 +49,6 @@ PUBLICATION_LATENCY = (2*24+13)*60*60
 #FFFF Make this configurable?  (Set to 2 weeks).
 PREPUBLICATION_INTERVAL = 14*24*60*60
 
-# URL to which we should post published servers.
-#
-#FFFF Make this configurable
-DIRECTORY_UPLOAD_URL = "http://mixminion.net/minion-cgi/publish"
 
 #----------------------------------------------------------------------
 class ServerKeyring:
@@ -245,7 +241,7 @@ class ServerKeyring:
 
         rejected = 0
         for ks in keySets:
-            status = ks.publish(DIRECTORY_UPLOAD_URL)
+            status = ks.publish(self.config['DirectoryServers']['PublishURL'])
             if status == 'error':
                 LOG.error("Error publishing a key; giving up")
                 return 0
