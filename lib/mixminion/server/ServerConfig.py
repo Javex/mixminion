@@ -371,7 +371,7 @@ SERVER_SYNTAX =  {
                       },
         'DirectoryServers' : { # '__SECTION__' : ('REQUIRE', None, None),
                                'ServerURL' : ('ALLOW*', None, None),
-                               'PublishURL' : ('ALLOW*', None, None),
+                               'PublishURL' : ('ALLOW', None, "http://mixminion.net/minion-cgi/publish"),
                                'Publish' : ('ALLOW', "boolean", "no"),
                                'MaxSkew' : ('ALLOW', "interval",
                                             "10 minutes",) },
