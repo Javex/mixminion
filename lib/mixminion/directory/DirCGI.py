@@ -16,6 +16,7 @@ import sys
 from mixminion.directory.Directory import Directory
 from mixminion.directory.ServerInbox import ServerQueuedException
 from mixminion.Common import UIError
+from mixminion.directory.DirMain import getDirectory
 
 try:
     import cgitb
@@ -40,7 +41,7 @@ def run():
     desc = form.getfirst('desc')
     assert type(desc) == type('')
 
-    d = Directory(location=DIRECTORY_BASE)
+    d = getDirectory()
     inbox = d.getInbox()
 
     address = "<%s:%s>" % (os.environ.get("REMOTE_ADDR"),
