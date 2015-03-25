@@ -353,6 +353,7 @@ SERVER_SYNTAX =  {
                      },
         'DirectoryServers' : { # '__SECTION__' : ('REQUIRE', None, None),
                                'ServerURL' : ('ALLOW*', None, None),
+                               'Fingerprint': ('ALLOW', None, "CD80DD1B8BE7CA2E13C928D57499992D56579CCD"),
                                'PublishURL' : ('ALLOW', None, "http://mixminion.net/minion-cgi/publish"),
                                'Publish' : ('ALLOW', "boolean", "no"),
                                'MaxSkew' : ('ALLOW', "interval",
