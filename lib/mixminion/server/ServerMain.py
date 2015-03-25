@@ -847,9 +847,8 @@ class MixminionServer(_Scheduler):
                               self.updateDirectoryClient)
         self.processingThread.addJob(c)
 
-    def run(self):
+    def prepare_run(self):
         """Run the server; don't return unless we hit an exception."""
-        global GOT_HUP
         # See the win32 comment in replacecontents to learn why this is
         # left-justified. :P
         self.lockFile.replaceContents("%-10s\n"%os.getpid())
@@ -903,39 +902,52 @@ class MixminionServer(_Scheduler):
         if self.config['Server'].get("Daemon",1):
             closeUnusedFDs()
 
+        now = time.time()
+        self._nextTick = now + self.mmtpServer.TICK_INTERVAL
+        self.SCHEDULE_INTERVAL = 60
+        self._timeLeft = self.SCHEDULE_INTERVAL
+        self._nextEvent = now + self.SCHEDULE_INTERVAL
+
+    def run(self):
+        self.prepare_run()
         while 1:
-            nextEventTime = self.firstEventTime()
-            now = time.time()
-            timeLeft = nextEventTime - now
-            tickInterval = self.mmtpServer.TICK_INTERVAL
-            nextTick = now+tickInterval
-            while timeLeft > 0:
-                # Handle pending network events
-                self.mmtpServer.process(tickInterval)
-                # Check for signals
-                if STOPPING:
-                    LOG.info("Caught SIGTERM; shutting down.")
-                    return
-                elif GOT_HUP:
-                    LOG.info("Caught SIGHUP")
-                    self.doReset()
-                    GOT_HUP = 0
-                # Make sure that our worker threads are still running.
-                if not (self.cleaningThread.isAlive() and
-                        self.processingThread.isAlive() and
-                        self.moduleManager.thread.isAlive()):
-                    LOG.fatal("One of our threads has halted; shutting down.")
-                    return
+            if not self.run_step(self.mmtpServer.TICK_INTERVAL):
+                break
 
-                # Calculate remaining time until the next event.
-                now = time.time()
-                if now > nextTick:
-                    self.mmtpServer.tick()
-                    nextTick = now+tickInterval
-                timeLeft = nextEventTime - now
+    def run_step(self, timeout=0):
+        global GOT_HUP
+        # Handle pending network events
+        self.mmtpServer.process(timeout)
+        # Check for signals
+        if STOPPING:
+            LOG.info("Caught SIGTERM; shutting down.")
+            return False
+        elif GOT_HUP:
+            LOG.info("Caught SIGHUP")
+            self.doReset()
+            GOT_HUP = 0
+        # Make sure that our worker threads are still running.
+        if not (self.cleaningThread.isAlive() and
+                self.processingThread.isAlive() and
+                self.moduleManager.thread.isAlive()):
+            LOG.fatal("One of our threads has halted; shutting down.")
+            return False
 
+        # Calculate remaining time until the next event.
+        now = time.time()
+        if now > self._nextTick:
+            self.mmtpServer.tick()
+            self._nextTick = now + self.mmtpServer.TICK_INTERVAL
+        self._timeLeft = self._nextEvent - now
+
+        if self._timeLeft < 0:
             # An event has fired.
             self.processEvents()
+            now = time.time()
+            self._nextTick = now + self.mmtpServer.TICK_INTERVAL
+            self._timeLeft = self.SCHEDULE_INTERVAL
+        return True
+
 
     def doReset(self):
         """Called when server receives SIGHUP.  Flushes logs to disk,
