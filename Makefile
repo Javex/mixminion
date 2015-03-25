@@ -12,8 +12,18 @@
 
 # XXXX This fails when PYTHON is set to a version of Python earlier than 1.3
 
-PYTHON_CANDIDATES = python python2.3 python2.3x python2.2 python2.2x python2.1\
-        python2.1x python2.0 python2.0x python2
+PYTHON_CANDIDATES = python2 \
+        python3.0 python3 \
+        python2p7 python2.7 python2.7x \
+        python2p6 python2.6 python2.6x \
+        python2p5 python2.5 python2.5x \
+        python2p4 python2.4 python2.4x \
+        python2p3 python2.3 python2.3x \
+        python2p2 python2.2 python2.2x \
+        python2p1 python2.1 python2.1x \
+        python2.0 python2.0x \
+        python2
+
 FINDPYTHON = \
    if [ "x`which which`" = "x" ]; then                                       \
         echo "Ouch!  I couldn't run 'which' on your system.";                \
