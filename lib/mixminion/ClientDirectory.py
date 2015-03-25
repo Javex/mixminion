@@ -135,6 +135,7 @@ class ClientDirectory:
             self.__rebuildTables()
         finally:
             self._lock.write_out()
+        self.config = config
 
     def updateDirectory(self, forceDownload=0, timeout=None, now=None):
         """Download a directory from the network as needed."""

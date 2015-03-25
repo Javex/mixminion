@@ -725,6 +725,7 @@ class MixminionServer(_Scheduler):
         LOG.debug("Initializing directory client")
         self.dirClient = mixminion.ClientDirectory.ClientDirectory(
             os.path.join(config.getWorkDir(),"dir"))
+        self.dirClient.configure(config)
         try:
             self.dirClient.updateDirectory()
         except mixminion.ClientDirectory.GotInvalidDirectoryError, e:
