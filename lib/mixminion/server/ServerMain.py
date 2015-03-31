@@ -919,6 +919,7 @@ class MixminionServer(_Scheduler):
         global GOT_HUP
         # Handle pending network events
         self.mmtpServer.process(timeout)
+        self.dnsCache.process()
         # Check for signals
         if STOPPING:
             LOG.info("Caught SIGTERM; shutting down.")

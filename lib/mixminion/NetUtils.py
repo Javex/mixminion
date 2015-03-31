@@ -15,6 +15,7 @@ import socket
 import string
 import sys
 import time
+import ctypes
 from mixminion.Common import LOG, TimeoutError, _ALLCHARS
 import mixminion._minionlib
 
@@ -88,6 +89,18 @@ def getIP(name, preferIP4=PREFER_INET4):
     _,haveIP6 = getProtocolSupport()
     try:
         r = getIPs(name)
+        return filter_IPs(r, name, preferIP4)
+    except socket.error, e:
+        LOG.trace("Result for getIP(%r): error:%r",name,e)
+        if len(e.args) == 2:
+            return ("NOENT", str(e[1]), time.time())
+        else:
+            return ("NOENT", str(e), time.time())
+
+
+def filter_IPs(r, name, preferIP4=PREFER_INET4):
+    _,haveIP6 = getProtocolSupport()
+    try:
         inet4 = [ addr for addr in r if addr[0] == AF_INET ]
         inet6 = [ addr for addr in r if addr[0] == AF_INET6 ]
         if not (inet4 or inet6):
@@ -117,6 +130,111 @@ def getIP(name, preferIP4=PREFER_INET4):
             return ("NOENT", str(e[1]), time.time())
         else:
             return ("NOENT", str(e), time.time())
+
+
+# Async DNS stuff
+
+
+libc = ctypes.cdll.LoadLibrary('libc.so.6')
+libanl = ctypes.cdll.LoadLibrary('libanl.so.1')
+
+
+# these constants cribbed from libanl
+GAI_WAIT = 0
+GAI_NOWAIT = 1
+NI_MAXHOST = 1025
+NI_NUMERICHOST = 1
+
+
+class addrinfo(ctypes.Structure):
+    pass
+addrinfo._fields_ = [('ai_flags', ctypes.c_int),
+                ('ai_family', ctypes.c_int),
+                ('ai_socktype', ctypes.c_int),
+                ('ai_protocol', ctypes.c_int),
+                ('ai_addrlen', ctypes.c_size_t),
+                ('ai_addr', ctypes.c_void_p),
+                ('ai_canonname', ctypes.c_char_p),
+                ('ai_next', ctypes.POINTER(addrinfo))]
+
+
+c_addrinfo_p = ctypes.POINTER(addrinfo)
+
+
+class gaicb(ctypes.Structure):
+    _fields_ = [('ar_name', ctypes.c_char_p),
+                ('ar_service', ctypes.c_char_p),
+                ('ar_request', c_addrinfo_p),
+                ('ar_result', c_addrinfo_p)]
+
+
+c_gaicb_p = ctypes.POINTER(gaicb)
+
+
+getaddrinfo_a = libanl.getaddrinfo_a
+getaddrinfo_a.argtypes = [ctypes.c_int,   # mode
+                          ctypes.POINTER(c_gaicb_p), # list
+                          ctypes.c_int,   # nitems
+                          ctypes.c_void_p # sevp
+                          ]
+getaddrinfo_a.restype = ctypes.c_int
+
+
+getnameinfo = libc.getnameinfo
+getnameinfo.argtypes = [ctypes.c_void_p, # sa
+                        ctypes.c_size_t, # salen
+                        ctypes.c_char_p, # host
+                        ctypes.c_size_t, # hostlen
+                        ctypes.c_char_p, # serv
+                        ctypes.c_size_t, # servlen
+                        ctypes.c_int     # flags
+                        ]
+getnameinfo.restype = ctypes.c_int
+
+gai_error = libanl.gai_error
+gai_error.argtypes = [c_gaicb_p]
+gai_error.restype = ctypes.c_int
+
+gai_cancel = libanl.gai_cancel
+gai_cancel.argtypes = [c_gaicb_p]
+gai_cancel.restype = ctypes.c_int
+
+gai_strerror = libanl.gai_strerror
+gai_strerror.argtypes = [ctypes.c_int]
+gai_strerror.restype = ctypes.c_char_p
+
+GAI_NOWAIT = 1
+EAI_INPROGRESS = -100
+NI_NUMERICHOST = 1
+
+
+def getIP_async(name):
+    reqs = (c_gaicb_p * 1)()
+    g = gaicb()
+    ctypes.memset(ctypes.byref(g), 0, ctypes.sizeof(gaicb))
+    g.ar_name = name
+    reqs[0] = ctypes.pointer(g)
+
+    ret = getaddrinfo_a(GAI_NOWAIT, reqs, 1, None)
+    if ret != 0:
+        raise Exception("Lookup failed: %s" % gai_strerror(ret))
+    return reqs[0]
+
+def get_addrs_from_addrinfo(addrinfo):
+    addrs = []
+    now = time.time()
+    while addrinfo:
+        host = ctypes.create_string_buffer(1025)
+        ret = getnameinfo(
+            addrinfo.contents.ai_addr,
+            addrinfo.contents.ai_addrlen,
+            host, 1025, None, 0, NI_NUMERICHOST)
+        if ret != 0:
+            raise Exception("Lookup failed: %s" % gai_strerror(ret))
+        addrs.append((addrinfo.contents.ai_family, host.value, now))
+        addrinfo = addrinfo.contents.ai_next
+    return addrs
+
 
 #----------------------------------------------------------------------
 
