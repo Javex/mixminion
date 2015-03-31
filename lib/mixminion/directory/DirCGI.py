@@ -16,9 +16,8 @@ import sys
 from mixminion.directory.Directory import Directory
 from mixminion.directory.ServerInbox import ServerQueuedException
 from mixminion.Common import UIError
-from mixminion.directory.DirMain import cmd_import
+from mixminion.directory.DirMain import cmd_import, getDirectory, cmd_generate
 from mixminion.ServerInfo import ServerInfo
-from mixminion.directory.DirMain import getDirectory
 
 try:
     import cgitb
@@ -52,11 +51,13 @@ def run():
     try:
         os.umask(022)
         inbox.receiveServer(desc, address)
-        server = ServerInfo(string=desc)
-        nick = server.getNickname()
-        cmd_import([nick])
         print "Status: 1\nMessage: Accepted."
     except UIError, e:
         print "Status: 0\nMessage: %s"%e
     except ServerQueuedException, e:
         print "Status: 1\nMessage: %s"%e
+    finally:
+        server = ServerInfo(string=desc)
+        nick = server.getNickname()
+        cmd_import([nick])
+        cmd_generate([])
