@@ -977,6 +977,7 @@ class ClientConfig(_ConfigFile):
                    'EntropySource': ('ALLOW', "filename", "/dev/urandom"),
                    'TrustedUser': ('ALLOW*', "user", None),
                    'FileParanoia': ('ALLOW', "boolean", "yes"),
+                   'AsyncDNS': ('ALLOW', 'boolean', 'yes'),
                    },
         'DirectoryServers' :
                    { '__SECTION__' : ('ALLOW', None, None),

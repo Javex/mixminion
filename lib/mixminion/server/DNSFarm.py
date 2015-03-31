@@ -27,13 +27,15 @@ class DNSCache:
     # rCache: map from (family,lowercase IP) to (hostname, time).
     # callbacks: map from name to list of callback functions. (See lookup
     #     for definition of callback.)
-    def __init__(self):
+    def __init__(self, default_async=True):
         """Create a new DNSCache"""
         self.cache = {}
         self.rCache = {}
         self.callbacks = {}
-        self.pending_requests = []
+        self.async_requests = []
+        self.sync_requests = []
         self.cleanCache()
+        self.default_async = default_async
 
     def getNonblocking(self, name):
         """Return the cached result for the lookup of name.  If we're
@@ -58,12 +60,14 @@ class DNSCache:
         else:
             return v[0]
 
-    def lookup(self,name,cb):
+    def lookup(self,name,cb, async=None):
         """Look up the name 'name', and pass the result to the callback
            function 'cb' when we're done.  The result will be of the
            same form as the return value of NetUtils.getIP: either
            (Family, Address, Time) or ('NOENT', Reason, Time).
         """
+        if async is None:
+            async = self.default_async
         # Check for a static IP first; no need to resolve that.
         v = mixminion.NetUtils.nameIsStaticIP(name)
         if v is not None:
@@ -77,7 +81,7 @@ class DNSCache:
         # If we aren't looking up the answer, start looking it up.
         if v is None:
             LOG.trace("DNS cache starting lookup of %r", name)
-            self._beginLookup(name)
+            self._beginLookup(name, async)
         # If we _did_ have an answer, invoke the callback now.
         if v is not None and v is not PENDING:
             LOG.trace("DNS cache returning cached value %s for %r",
@@ -86,7 +90,7 @@ class DNSCache:
 
     def process(self):
         new_pending = []
-        for name, request in self.pending_requests:
+        for name, request in self.async_requests:
             ret = mixminion.NetUtils.gai_error(request)
             if ret == mixminion.NetUtils.EAI_INPROGRESS:
                 new_pending.append((name, request))
@@ -99,11 +103,14 @@ class DNSCache:
                 addrs = mixminion.NetUtils.get_addrs_from_addrinfo(addrinfo)
                 final_result = mixminion.NetUtils.filter_IPs(addrs, name)
                 self._lookupDone(name, final_result)
-        self.pending_requests = new_pending
+        self.async_requests = new_pending
+        while self.sync_requests:
+            name, result = self.sync_requests.pop()
+            self._lookupDone(name, result)
 
     def shutdown(self, wait=0):
         """Cancel all pending requests"""
-        for req in self.pending_requests:
+        for req in self.async_requests:
             mixminion.NetUtils.gai_cancel(req)
 
     def cleanCache(self,now=None):
@@ -124,14 +131,18 @@ class DNSCache:
             if now-v[1] > MAX_RENTRY_TTL:
                 del rCache[name]
 
-    def _beginLookup(self,name):
+    def _beginLookup(self,name, async):
         """Helper function: Begin looking up 'name'.
 
            Caller must hold self.lock
         """
         self.cache[name] = PENDING
-        request = mixminion.NetUtils.getIP_async(name)
-        self.pending_requests.append((name, request))
+        if async:
+            request = mixminion.NetUtils.getIP_async(name)
+            self.async_requests.append((name, request))
+        else:
+            result = mixminion.NetUtils.getIP(name)
+            self.sync_requests.append((name, result))
 
     def _lookupDone(self,name,val):
         """Helper function: invoked when we get the answer 'val' for

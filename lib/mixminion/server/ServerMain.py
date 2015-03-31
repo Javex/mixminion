@@ -654,7 +654,7 @@ class MixminionServer(_Scheduler):
                        self.outgoingQueue.count())
 
 
-        self.dnsCache = mixminion.server.DNSFarm.DNSCache()
+        self.dnsCache = mixminion.server.DNSFarm.DNSCache(config['Host']['AsyncDNS'])
 
         LOG.debug("Connecting queues")
         self.incomingQueue.connectQueues(mixPool=self.mixPool)
