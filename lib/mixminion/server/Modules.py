@@ -233,7 +233,7 @@ class SimpleModuleDeliveryQueue(mixminion.server.ServerQueue.DeliveryQueue):
                 handle.failed(0)
                 EventStats.log.unretriableDelivery() #FFFF
 
-class DeliveryThread(threading.Thread):
+class Delivery:
     """A thread object used by ModuleManager to send messages in the
        background; delegates to ModuleManager._sendReadyMessages."""
     ## Fields:
@@ -243,7 +243,6 @@ class DeliveryThread(threading.Thread):
     # __stoppingEvent -- an event that is set when we're shutting down.
     def __init__(self, moduleManager):
         """Create a new DeliveryThread."""
-        threading.Thread.__init__(self)
         self.moduleManager = moduleManager
         self.event = threading.Event()
         self.__stoppingevent = threading.Event()
@@ -324,13 +323,7 @@ class ModuleManager:
         self.registerModule(FragmentModule())
 
         self._isConfigured = 0
-        self.thread = None
-
-    def startThreading(self):
-        """Begin delivering messages in a separate thread.  Should only
-           be called once."""
-        self.thread = DeliveryThread(self)
-        self.thread.start()
+        self.delivery = None
 
     def isConfigured(self):
         """Return true iff this object's configure method has been called"""
@@ -463,28 +456,28 @@ class ModuleManager:
         return queue.queueDeliveryMessage(packet)
 
     def shutdown(self):
-        """Tell the delivery thread (if any) to stop."""
-        if self.thread is not None:
-            self.thread.shutdown()
+        """Tell the delivery (if any) to stop."""
+        if self.delivery is not None:
+            self.delivery.shutdown()
 
     def join(self):
-        """Wait for the delivery thread (if any) to finish shutting down."""
-        if self.thread is not None:
-            self.thread.join()
+        """Wait for the delivery (if any) to finish shutting down."""
+        if self.delivery is not None:
+            self.delivery.join()
 
     def sendReadyMessages(self):
         """Begin message delivery, either by telling every module's queue to
            try sending its pending messages, or by telling the delivery
-           thread to do so if we're threading."""
-        if self.thread is not None:
-            self.thread.beginSending()
+           to do so if we're deliverying."""
+        if self.delivery is not None:
+            self.delivery.beginSending()
         else:
             self._sendReadyMessages()
 
     def _sendReadyMessages(self):
         """Actual implementation of message delivery. Tells every module's
            queue to send pending messages.  This is called directly if
-           we aren't threading, and from the delivery thread if we are."""
+           we aren't deliverying, and from the delivery if we are."""
         queuelist = [ (queue.getPriority(), queue)
                       for queue in self.queues.values() ]
         queuelist.sort()

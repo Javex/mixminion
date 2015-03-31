@@ -149,7 +149,6 @@ class IncomingQueue(mixminion.Filestore.StringStore):
     ## Fields:
     # packetHandler -- an instance of PacketHandler.
     # mixPool -- an instance of MixPool
-    # processingThread -- an instance of ProcessingThread
     def __init__(self, location, packetHandler):
         """Create an IncomingQueue that stores its packets in <location>
            and processes them through <packetHandler>."""
@@ -157,22 +156,19 @@ class IncomingQueue(mixminion.Filestore.StringStore):
         self.packetHandler = packetHandler
         self.mixPool = None
 
-    def connectQueues(self, mixPool, processingThread):
+    def connectQueues(self, mixPool):
         """Sets the target mix queue"""
         self.mixPool = mixPool
-        self.processingThread = processingThread
         for h in self.getAllMessages():
             assert h is not None
-            self.processingThread.addJob(
-                lambda self=self, h=h: self.__deliverPacket(h))
+            self.__deliverPacket(h)
 
     def queuePacket(self, pkt):
         """Add a packet for delivery"""
         h = mixminion.Filestore.StringStore.queueMessage(self, pkt)
         LOG.trace("Inserting packet IN:%s into incoming queue", h)
         assert h is not None
-        self.processingThread.addJob(
-            lambda self=self, h=h: self.__deliverPacket(h))
+        self.__deliverPacket(h)
 
     def queueMessage(self, m):
         # Never call this directly.
@@ -392,111 +388,6 @@ class _MMTPServer(mixminion.server.MMTPServer.MMTPAsyncServer):
         EventStats.log.receivedPacket()
 
 #----------------------------------------------------------------------
-class CleaningThread(threading.Thread):
-    """Thread that handles file deletion.  Some methods of secure deletion
-       are slow enough that they'd block the server if we did them in the
-       main thread.
-    """
-    # Fields:
-    #   mqueue: A ClearableQueue holding lists of filenames to delete,
-    #     or None to indicate a shutdown.
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.mqueue = ClearableQueue()
-
-    def deleteFile(self, fname):
-        """Schedule the file named 'fname' for deletion"""
-        #LOG.trace("Scheduling %s for deletion", fname)
-        assert fname is not None
-        self.mqueue.put([fname])
-
-    def deleteFiles(self, fnames):
-        """Schedule all the files in the list 'fnames' for deletion"""
-        self.mqueue.put(fnames)
-
-    def shutdown(self):
-        """Tell this thread to shut down once it has deleted all pending
-           files."""
-        LOG.info("Telling cleanup thread to shut down.")
-        self.mqueue.clear()
-        self.mqueue.put(None)
-
-    def run(self):
-        """implementation of the cleaning thread's main loop: waits for
-           a filename to delete or an indication to shutdown, then
-           acts accordingly."""
-        try:
-            running = 1
-            while running:
-                fnames = self.mqueue.get()
-                if fnames is None:
-                    fnames = []
-                    running = 0
-
-                try:
-                    while 1:
-                        more = self.mqueue.get(0)
-                        if more is None:
-                            running=0
-                        fnames.extend(more)
-                except QueueEmpty:
-                    pass
-
-                delNames = []
-                for fn in fnames:
-                    if os.path.exists(fn):
-                        delNames.append(fn)
-                    else:
-                        LOG.warn("Delete thread didn't find file %s",fn)
-
-                secureDelete(delNames, blocking=1)
-
-            LOG.info("Cleanup thread shutting down.")
-        except:
-            LOG.error_exc(sys.exc_info(),
-                          "Exception while cleaning; shutting down thread.")
-
-class ProcessingThread(threading.Thread):
-    """Background thread to handle CPU-intensive functions.
-
-       Currently used to process packets in the background."""
-    # Fields:
-    #   mqueue: a ClearableQueue of callable objects.
-    class _Shutdown:
-        """Callable that raises itself when called.  Inserted into the
-           queue when it's time to shut down."""
-        def __call__(self):
-            raise self
-
-    def __init__(self):
-        """Create a new processing thread."""
-        threading.Thread.__init__(self)
-        self.mqueue = ClearableQueue()
-
-    def shutdown(self):
-        LOG.info("Telling processing thread to shut down.")
-        self.mqueue.clear()
-        self.mqueue.put(ProcessingThread._Shutdown())
-
-    def addJob(self, job):
-        """Adds a job to the message queue.  A job is a callable object
-           to be invoked by the processing thread.  If the job raises
-           ProcessingThread._Shutdown, the processing thread stops running."""
-        self.mqueue.put(job)
-
-    def run(self):
-        try:
-            while 1:
-                job = self.mqueue.get()
-                job()
-        except ProcessingThread._Shutdown:
-            LOG.info("Processing thread shutting down.")
-            return
-        except:
-            LOG.error_exc(sys.exc_info(),
-                          "Exception while processing; shutting down thread.")
-
-#----------------------------------------------------------------------
 STOPPING = 0 # Set to one if we get SIGTERM
 def _sigTermHandler(signal_num, _):
     '''(Signal handler for SIGTERM)'''
@@ -647,9 +538,6 @@ class MixminionServer(_Scheduler):
     # moduleManager: Instance of ModuleManager.  Map routing types to
     #    outgoing queues, and processes non-MMTP exit messages.
     # outgoingQueue: Holds packets waiting to be send via MMTP.
-    # cleaningThread: Thread used to remove packets in the background
-    # processingThread: Thread to handle CPU-intensive activity without
-    #    slowing down network interactivity.
     # lockFile: An instance of Lockfile to prevent multiple servers from
     #    running in the same directory.  The filename for this lock is
     #    stored in self.pidFile.
@@ -765,14 +653,11 @@ class MixminionServer(_Scheduler):
         LOG.debug("Found %d pending packets in outgoing queue",
                        self.outgoingQueue.count())
 
-        self.cleaningThread = CleaningThread()
-        self.processingThread = ProcessingThread()
 
         self.dnsCache = mixminion.server.DNSFarm.DNSCache()
 
         LOG.debug("Connecting queues")
-        self.incomingQueue.connectQueues(mixPool=self.mixPool,
-                                       processingThread=self.processingThread)
+        self.incomingQueue.connectQueues(mixPool=self.mixPool)
         self.mixPool.connectQueues(outgoing=self.outgoingQueue,
                                    manager=self.moduleManager)
         self.outgoingQueue.connectQueues(server=self.mmtpServer,
@@ -780,10 +665,6 @@ class MixminionServer(_Scheduler):
         self.mmtpServer.connectQueues(incoming=self.incomingQueue,
                                       outgoing=self.outgoingQueue)
         self.mmtpServer.connectDNSCache(self.dnsCache)
-
-        self.cleaningThread.start()
-        self.processingThread.start()
-        self.moduleManager.startThreading()
 
     def updateKeys(self, lock=1):
         """Change the keys used by the PacketHandler and MMTPServer objects
@@ -827,8 +708,7 @@ class MixminionServer(_Scheduler):
                                   self.generateKeys)
             finally:
                 self.keyring.unlock()
-
-        self.processingThread.addJob(c)
+        c()
 
     def updateDirectoryClient(self):
         def c(self=self):
@@ -846,7 +726,7 @@ class MixminionServer(_Scheduler):
                                  time.time()+3600)
             self.scheduleOnce(nextUpdate, "UPDATE_DIR_CLIENT",
                               self.updateDirectoryClient)
-        self.processingThread.addJob(c)
+        c()
 
     def prepare_run(self):
         """Run the server; don't return unless we hit an exception."""
@@ -928,12 +808,6 @@ class MixminionServer(_Scheduler):
             LOG.info("Caught SIGHUP")
             self.doReset()
             GOT_HUP = 0
-        # Make sure that our worker threads are still running.
-        if not (self.cleaningThread.isAlive() and
-                self.processingThread.isAlive() and
-                self.moduleManager.thread.isAlive()):
-            LOG.fatal("One of our threads has halted; shutting down.")
-            return False
 
         # Calculate remaining time until the next event.
         now = time.time()
@@ -997,10 +871,8 @@ class MixminionServer(_Scheduler):
     def cleanQueues(self):
         """Remove all deleted messages from queues"""
         LOG.trace("Expunging deleted messages from queues")
-        # We use the 'deleteFiles' method from 'cleaningThread' so that
-        # we schedule old files to get deleted in the background, rather than
-        # blocking while they're deleted.
-        df = self.cleaningThread.deleteFiles
+        def df(fnames):
+            secureDelete([f for f in fnames if os.path.exists(f)], blocking=0)
         self.incomingQueue.cleanQueue(df)
         self.mixPool.queue.cleanQueue(df)
         self.outgoingQueue.cleanQueue(df)
@@ -1008,12 +880,8 @@ class MixminionServer(_Scheduler):
 
     def close(self):
         """Release all resources; close all files."""
-        self.cleaningThread.shutdown()
-        self.processingThread.shutdown()
         self.moduleManager.shutdown()
 
-        self.cleaningThread.join()
-        self.processingThread.join()
         self.moduleManager.join()
 
         self.packetHandler.close()
