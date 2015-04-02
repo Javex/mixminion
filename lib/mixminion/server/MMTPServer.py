@@ -258,11 +258,78 @@ class PollAsyncServer(SelectAsyncServer):
         self.poll.unregister(fd)
         del self.connections[fd]
 
+
+class EPollAsyncServer(SelectAsyncServer):
+    """Subclass of SelectAsyncServer that uses 'poll' where available.  This
+       is more efficient, but less universal."""
+
+    def __init__(self):
+        SelectAsyncServer.__init__(self)
+        self.epoll = select.epoll()
+        self.EVENT_MASK = {
+            (0, 0): 0,
+            (1, 0): select.EPOLLIN + select.EPOLLERR,
+            (0, 1): select.EPOLLOUT + select.EPOLLERR,
+            (0, 2): select.EPOLLOUT + select.EPOLLERR,
+            (1, 1): select.EPOLLIN + select.EPOLLOUT + select.EPOLLERR,
+            (1, 2): select.EPOLLIN + select.EPOLLOUT + select.EPOLLERR,
+        }
+
+    def process(self, timeout):
+        try:
+            events = self.epoll.poll(timeout)
+        except IOError as e:
+            if e[0] == errno.EINTR:
+                return
+            else:
+                raise e
+
+        if not events:
+            return
+
+        if self.bucket is None:
+            cap = None
+        else:
+            cap = floorDiv(self.bucket, len(events))
+
+        for fd, mask in events:
+            c = self.connections[fd]
+            wr, ww, isopen, n = c.process(
+                mask & select.EPOLLIN,
+                mask & select.EPOLLOUT,
+                mask & (select.EPOLLERR | select.EPOLLHUP),
+                cap)
+            if cap is not None:
+                self.bucket -= n
+            if not isopen:
+                self.remove(c, fd)
+                continue
+            self.epoll.modify(fd,self.EVENT_MASK[wr,ww])
+
+    def register(self, c):
+        fd = c.fileno()
+        wr, ww, isopen = c.getStatus()
+        if not isopen:
+            return
+        self.connections[fd] = c
+        mask = self.EVENT_MASK[(wr, ww)]
+        self.epoll.register(fd, mask)
+
+    def remove(self, c, fd=None):
+        if fd is None:
+            fd = c.fileno()
+        self.epoll.unregister(fd)
+        del self.connections[fd]
+
+
 if hasattr(select,'poll') and not _ml.POLL_IS_EMULATED and sys.platform != 'cygwin':
     # Prefer 'poll' to 'select', except on MacOS and other platforms where
     # where 'poll' is just a wrapper around 'select'.  (The poll wrapper is
     # sometimes buggy.)
-    AsyncServer = PollAsyncServer
+    if hasattr(select, 'epoll'):
+        AsyncServer = EPollAsyncServer
+    else:
+        AsyncServer = PollAsyncServer
 else:
     AsyncServer = SelectAsyncServer
 
