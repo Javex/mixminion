@@ -234,6 +234,9 @@ class MixminionClient:
         self.queue = mixminion.ClientUtils.ClientQueue(os.path.join(userdir, "queue"))
         self.pool = mixminion.ClientUtils.ClientFragmentPool(os.path.join(userdir, "fragments"))
 
+        self.async = mixminion.MMTPClient.AsyncClientHandler()
+        self.async_data = {}
+
     def _sortPackets(self, packets, shuffle=1):
         """Helper function.  Takes a list of tuples of (packet,
            ServerInfo/routigInforoutingInfo),
@@ -459,8 +462,7 @@ class MixminionClient:
         except MixProtocolError, e:
             return 0, "Couldn't connect to server: %s" % e
 
-    def sendPackets(self, pktList, routingInfo, noQueue=0, lazyQueue=0,
-                    alreadyQueued=0, warnIfLost=1):
+    def sendPackets(self, pktList, routingInfo, *args, **kw):
         """Given a list of packets and an IPV4Info object, sends the
            packets to the server via MMTP.
 
@@ -475,76 +477,101 @@ class MixminionClient:
 
            XXXX return 1 if all delivered
            """
-        #XXXX write unit tests
-        timeout = self.config.getTimeout()
+        key = 0
+        self.sendPacketsAsync(pktList, routingInfo, key, *args, **kw)
+        while not self.async.is_done():
+          self.process()
+        self.finishPacketsAsync()
+        nGood = self.async_data[key]['nGood']
+        del self.async_data[key]
+        return nGood
 
+    def sendPacketsAsync(
+            self, pktList, routingInfo, data_key, noQueue=0, lazyQueue=0,
+            alreadyQueued=0, warnIfLost=1):
+        assert data_key not in self.async_data
+        data = self.async_data.setdefault(data_key, {})
+        data['pktList'] = pktList
+        data['routingInfo'] = routingInfo
         if noQueue or lazyQueue:
             handles = []
         else:
             handles = self.queuePackets(pktList, routingInfo)
+        data['noQueue'] = noQueue
+        data['lazyQueue'] = lazyQueue
+        data['handles'] = handles
+        data['pktList'] = pktList
+        data['warnIfLost'] = warnIfLost
+        data['alreadyQueued'] = alreadyQueued
 
-        packetsSentByIndex = {}
-        def callback(idx, packetsSentByIndex=packetsSentByIndex):
+        data['packetsSentByIndex'] = {}
+        def callback(idx, packetsSentByIndex=data['packetsSentByIndex']):
             packetsSentByIndex[idx] = 1
 
-        try:
-            # May raise TimeoutError
-            LOG.info("Connecting...")
-            mixminion.MMTPClient.sendPackets(routingInfo,
-                                             pktList,
-                                             timeout,
-                                             callback=callback)
+        # May raise TimeoutError
+        LOG.info("Connecting...")
+        self.async.startSending(
+            routingInfo, pktList, data_key, callback=callback)
 
-        except:
-            exc = sys.exc_info()
-        else:
-            exc = None
-        nGood = len(packetsSentByIndex)
-        nBad = len(pktList)-nGood
+    def process(self):
+        timeout = self.config.getTimeout()
+        self.async.process(timeout)
 
-        clientLock()
-        try:
-            if nGood:
-                LOG.info("... %s sent", nGood)
-                LOG.trace("Removing %s successful packets from queue", nGood)
-            for idx in packetsSentByIndex.keys():
-                if handles and handles[idx]:
-                    self.queue.removePacket(handles[idx])
-                elif hasattr(pktList[idx], 'remove'):
-                    pktList[idx].remove()
-            if nGood:
-                try:
-                    self.queue.cleanQueue()
-                except:
-                    e2 = sys.exc_info()
-                    LOG.error("Error while cleaning queue: %s",e2[1])
+    def finishPacketsAsync(self):
+        for key, data in self.async_data.items():
+            pktList = data['pktList']
+            routingInfo = data['routingInfo']
+            try:
+                self.async.finishSending(key)
+            except:
+                exc = sys.exc_info()
+            else:
+                exc = None
+            nGood = len(data['packetsSentByIndex'])
+            nBad = len(data['pktList']) - nGood
 
-            if nBad and noQueue:
-                if warnIfLost:
-                    LOG.error("Error with queueing disabled: %s/%s lost",
-                              nBad, nGood+nBad)
-                elif alreadyQueued:
+            clientLock()
+            try:
+                if nGood:
+                    LOG.info("... %s sent", nGood)
+                    LOG.trace("Removing %s successful packets from queue", nGood)
+                for idx in data['packetsSentByIndex']:
+                    if data['handles'] and data['handles'][idx]:
+                        self.queue.removePacket(data['handles'][idx])
+                    elif hasattr(data['pktList'][idx], 'remove'):
+                        data['pktList'][idx].remove()
+                if nGood:
+                    try:
+                        self.queue.cleanQueue()
+                    except:
+                        e2 = sys.exc_info()
+                        LOG.error("Error while cleaning queue: %s",e2[1])
+
+                if nBad and data['noQueue']:
+                    if data['warnIfLost']:
+                        LOG.error("Error with queueing disabled: %s/%s lost",
+                                  nBad, nGood+nBad)
+                    elif data['alreadyQueued']:
+                        LOG.info("Error while delivering packets; %s/%s left in queue",
+                                 nBad,nGood+nBad)
+                elif nBad and data['lazyQueue']:
                     LOG.info("Error while delivering packets; %s/%s left in queue",
                              nBad,nGood+nBad)
-            elif nBad and lazyQueue:
-                LOG.info("Error while delivering packets; %s/%s left in queue",
-                         nBad,nGood+nBad)
-                badPackets = [ pktList[idx] for idx in xrange(len(pktList))
-                               if not packetsSentByIndex.has_key(idx) ]
+                    badPackets = [ pktList[idx] for idx in xrange(len(pktList))
+                                   if not data['packetsSentByIndex'].has_key(idx) ]
 
-                self.queuePackets(badPackets, routingInfo)
-            elif nBad:
-                assert not (noQueue or lazyQueue)
-                LOG.info("Error while delivering packets; leaving %s/%s in queue",
-                         nBad, nBad+nGood)
-            if exc and not nBad:
-                LOG.info("Got error after all packets were delivered.")
-            if exc:
-                LOG.info("Error was: %s", exc[1])
-        finally:
-            clientUnlock()
-
-        return nGood
+                    self.queuePackets(badPackets, routingInfo)
+                elif nBad:
+                    assert not (data['noQueue'] or data['lazyQueue'])
+                    LOG.info("Error while delivering packets; leaving %s/%s in queue",
+                             nBad, nBad+nGood)
+                if exc and not nBad:
+                    LOG.info("Got error after all packets were delivered.")
+                if exc:
+                    LOG.info("Error was: %s", exc[1])
+            finally:
+                clientUnlock()
+            data['nGood'] = nGood
 
     def flushQueue(self, maxPackets=None, handles=None):
         """Try to send packets in the queue to their destinations.  Do not try

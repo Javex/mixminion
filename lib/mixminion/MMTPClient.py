@@ -26,6 +26,7 @@ from mixminion.Crypto import sha1, getCommonPRNG
 from mixminion.Common import MixProtocolError, MixProtocolReject, \
      MixProtocolBadAuth, LOG, MixError, formatBase64, TimeoutError
 from mixminion.Packet import IPV4Info, MMTPHostInfo
+import mixminion.AsyncUtils
 
 def _noop(*k,**v): pass
 class EventStatsDummy:
@@ -353,6 +354,69 @@ class MMTPClientConnection(mixminion.TLSConnection.TLSConnection):
         return self._isAlive
 
 
+class AsyncClientHandler(mixminion.AsyncUtils.AsyncServer):
+
+    def __init__(self):
+        self.data = {}
+        mixminion.AsyncUtils.AsyncServer.__init__(self)
+
+    def startSending(self, routing, packetList, key, callback=None):
+        # Find out where we're connecting to.
+        serverName = mixminion.ServerInfo.displayServerByRouting(routing)
+        if isinstance(routing, IPV4Info):
+            family, addr = socket.AF_INET, routing.ip
+        else:
+            assert isinstance(routing, MMTPHostInfo)
+            LOG.trace("Looking up %s...",routing.hostname)
+            family, addr, _ = mixminion.NetUtils.getIP(routing.hostname)
+            if family == "NOENT":
+                raise MixProtocolError("Couldn't resolve hostname %s: %s" % (
+                                       routing.hostname, addr))
+
+        # Create an MMTPClientConnection
+        try:
+            con = MMTPClientConnection(
+                family, addr, routing.port, routing.keyinfo, serverName=serverName)
+        except socket.error, e:
+            raise MixProtocolError(str(e))
+        self.register(con)
+
+        # Queue the items on the list.
+        _, _, deliverables= self.data.setdefault(key, (con, serverName, []))
+        for idx in xrange(len(packetList)):
+            p = packetList[idx]
+            if p == 'JUNK':
+                pkt = DeliverableString(isJunk=1)
+            elif p == 'RENEGOTIATE':
+                continue #XXXX no longer supported.
+            else:
+                if callback is not None:
+                    def cb(idx=idx,callback=callback): callback(idx)
+                else:
+                    cb = None
+                pkt = DeliverableString(s=p,callback=cb)
+            deliverables.append(pkt)
+            con.addPacket(pkt)
+
+    def process(self, timeout=300):
+        mixminion.AsyncUtils.AsyncServer.process(self, timeout)
+
+    def is_done(self):
+        return not bool(self.connections)
+
+    def finishSending(self, key):
+        con, serverName, deliverables = self.data.pop(key)
+        # If anything wasn't delivered, raise MixProtocolError.
+        for d in deliverables:
+            if d._failed:
+                raise MixProtocolError("Error occurred while delivering packets to %s"%
+                                       serverName)
+
+        # If the connection failed, raise MixProtocolError.
+        if con._isFailed:
+            raise MixProtocolError("Error occurred on connection to %s"%serverName)
+
+
 class DeliverableString(DeliverableMessage):
     """Subclass of DeliverableMessage suitable for use by ClientMain and
        sendPackets.  Sends str(s) for some object s; invokes a callback on
@@ -395,76 +459,12 @@ def sendPackets(routing, packetList, timeout=300, callback=None):
        callback -- None, or a function to call with a index into packetList
            after each successful packet delivery.
     """
-    # Find out where we're connecting to.
-    serverName = mixminion.ServerInfo.displayServerByRouting(routing)
-    if isinstance(routing, IPV4Info):
-        family, addr = socket.AF_INET, routing.ip
-    else:
-        assert isinstance(routing, MMTPHostInfo)
-        LOG.trace("Looking up %s...",routing.hostname)
-        family, addr, _ = mixminion.NetUtils.getIP(routing.hostname)
-        if family == "NOENT":
-            raise MixProtocolError("Couldn't resolve hostname %s: %s" % (
-                                   routing.hostname, addr))
-
-    # Create an MMTPClientConnection
-    try:
-        con = MMTPClientConnection(
-            family, addr, routing.port, routing.keyinfo, serverName=serverName)
-    except socket.error, e:
-        raise MixProtocolError(str(e))
-
-    # Queue the items on the list.
-    deliverables = []
-    for idx in xrange(len(packetList)):
-        p = packetList[idx]
-        if p == 'JUNK':
-            pkt = DeliverableString(isJunk=1)
-        elif p == 'RENEGOTIATE':
-            continue #XXXX no longer supported.
-        else:
-            if callback is not None:
-                def cb(idx=idx,callback=callback): callback(idx)
-            else:
-                cb = None
-            pkt = DeliverableString(s=p,callback=cb)
-        deliverables.append(pkt)
-        con.addPacket(pkt)
-
-    # Use select to run the connection until it's done.
-    import select
-    fd = con.fileno()
-    wr,ww,isopen = con.getStatus()
-    while isopen:
-        if wr:
-            rfds = [fd]
-        else:
-            rfds = []
-        if ww:
-            wfds = [fd]
-        else:
-            wfds = []
-        if ww==2:
-            xfds = [fd]
-        else:
-            xfds = []
-
-        rfds,wfds,xfds=select.select(rfds,wfds,xfds,3)
-        now = time.time()
-        wr,ww,isopen,_=con.process(fd in rfds, fd in wfds, 0)
-        if isopen:
-            if con.tryTimeout(now-timeout):
-                isopen = 0
-
-    # If anything wasn't delivered, raise MixProtocolError.
-    for d in deliverables:
-        if d._failed:
-            raise MixProtocolError("Error occurred while delivering packets to %s"%
-                                   serverName)
-
-    # If the connection failed, raise MixProtocolError.
-    if con._isFailed:
-        raise MixProtocolError("Error occurred on connection to %s"%serverName)
+    async = AsyncClientHandler()
+    key = 0
+    async.startSending(routing, packetList, key, callback)
+    while not async.is_done():
+        async.process()
+    async.finishSending(key)
 
 def pingServer(routing, timeout=60):
     """Try to connect to a server and send a junk packet.
