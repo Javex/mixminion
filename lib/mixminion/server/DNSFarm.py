@@ -19,6 +19,11 @@ class _Pending:
         return cmp(type(self), type(o))
 PENDING = _Pending()
 
+# We clear entries from the DNS cache when they're more than MAX_ENTRY_TTL
+# seconds old...
+MAX_ENTRY_TTL = 30*60
+# ...and entries from the reverse cache after MAX_RENTRY_TTL seconds.
+MAX_RENTRY_TTL = 24*60*60
 
 class DNSCache:
     """Class to cache answers to DNS requests asynchronously"""
