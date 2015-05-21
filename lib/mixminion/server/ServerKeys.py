@@ -1144,19 +1144,22 @@ def _guessLocalIP():
 
     # First, let's see what our name resolving subsystem says our
     # name is.
-    ip_set = {}
+    ainfo = None
     try:
-        ip_set[ socket.gethostbyname(socket.gethostname()) ] = 1
+        ainfo = socket.getaddrinfo(socket.gethostname(), None)
     except socket.error:
         try:
-            ip_set[ socket.gethostbyname(socket.getfqdn()) ] = 1
+            ainfo = socket.getaddrinfo(socket.getfqdn(), None, socket.AF_INET)
         except socket.error:
             pass
+    if ainfo:
+        return ainfo[0][4][0]
 
+    ip_set = {}
     # And in case that doesn't work, let's see what other addresses we might
     # think we have by using 'getsockname'.
     for target_addr in ('18.0.0.1', '10.0.0.1', '192.168.0.1',
-                        '172.16.0.1')+tuple(ip_set.keys()):
+                        '172.16.0.1'):
         # open a datagram socket so that we don't actually send any packets
         # by connecting.
         try:
