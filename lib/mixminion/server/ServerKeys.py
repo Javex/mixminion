@@ -27,6 +27,7 @@ import mixminion.Packet
 import mixminion.server.HashLog
 import mixminion.server.MMTPServer
 import mixminion.server.ServerMain
+import mixminion.AsyncUtils
 
 from mixminion.ServerInfo import ServerInfo, PACKET_KEY_BYTES, MMTP_KEY_BYTES,\
      signServerInfo
@@ -74,6 +75,8 @@ class ServerKeyring:
         "Create a ServerKeyring from a config object"
         self._lock = threading.RLock()
         self.configure(config)
+        self._publish_state = None
+        self._epoll = None
 
     def configure(self, config):
         "Set up a ServerKeyring from a config object"
@@ -231,30 +234,40 @@ class ServerKeyring:
            all descriptors are sent."""
         keySets = [ ks for _, _, ks in self.keySets ]
         if allKeys:
-            LOG.info("Republishing all known keys to directory server")
-        else:
             keySets = [ ks for ks in keySets if not ks.isPublished() ]
             if not keySets:
                 LOG.trace("publishKeys: no unpublished keys found")
-                return
-            LOG.info("Publishing %s keys to directory server...",len(keySets))
-
-        rejected = 0
-        for ks in keySets:
-            status = ks.publish(self.config['DirectoryServers']['PublishURL'])
-            if status == 'error':
-                LOG.error("Error publishing a key; giving up")
-                return 0
-            elif status == 'reject':
-                rejected += 1
+                return True
+        if self._publish_state is None:
+            if allKeys:
+                LOG.info("Republishing all known keys to directory server")
             else:
-                assert status == 'accept'
-        if rejected == 0:
-            LOG.info("All keys published successfully.")
-            return 1
+                LOG.info("Publishing %s keys to directory server...",len(keySets))
+
+            self._epoll = mixminion.AsyncUtils.AsyncServer()
+            for ks in keySets:
+                conn = ks.prepare_publish(self.config['DirectoryServers']['PublishURL'])
+                self._epoll.register(conn)
+            self._publish_state = 'processing'
+        elif self._publish_state == 'processing':
+            self._epoll.process(0)
+            if not self._epoll.connections:
+                rejected_count = 0
+                for ks in keySets:
+                    status = ks.finish_publish()
+                if status == 'error':
+                    LOG.error("Error publishing a key; giving up")
+                    return True
+                elif status == 'reject':
+                    rejected_count += 1
+                self._publish_state = None
+                if rejected_count == 0:
+                    LOG.info("All keys published successfully.")
+                else:
+                    LOG.info("%s/%s keys were rejected." , rejected_count, len(keySets))
+                return True
         else:
-            LOG.info("%s/%s keys were rejected." , rejected, len(keySets))
-            return 0
+            raise ValueError("Unknown publish state")
 
     def removeIdentityKey(self):
         """Remove this server's identity key."""
@@ -702,6 +715,44 @@ class ServerKeyset:
                                           config,
                                           log=log,
                                           isPublished=self.published)
+
+    def prepare_publish(self, url):
+        fname = self.getDescriptorFileName()
+        descriptor = readFile(fname)
+        fields = urllib.urlencode({"desc" : descriptor})
+        self.request = None
+        try:
+            self.request = urllib2.urlopen(url, fields)
+        except IOError, e:
+            LOG.error("Error while publishing server descriptor: %s",e)
+            return 'error'
+        except:
+            LOG.error_exc(sys.exc_info(),
+                          "Error publishing server descriptor")
+            return 'error'
+        return self.request
+
+    def finish_publish(self):
+        info = self.request.response.headers
+        reply = self.request.response.read()
+        if info.get('Content-Type') != 'text/plain':
+            LOG.error("Bad content type %s from directory"%info.get(
+                'Content-Type'))
+            return 'error'
+        m = DIRECTORY_RESPONSE_RE.search(reply)
+        if not m:
+            LOG.error("Didn't understand reply from directory: %s",
+                      reply)
+            return 'error'
+        ok = int(m.group(1))
+        msg = m.group(2)
+        if not ok:
+            LOG.error("Directory rejected descriptor: %r", msg)
+            return 'reject'
+
+        LOG.info("Directory accepted descriptor: %r", msg)
+        self.markAsPublished()
+        return 'accept'
 
     def publish(self, url):
         """Try to publish this descriptor to a given directory URL.  Returns

@@ -7,7 +7,6 @@ import threading
 import time
 from types import StringType
 
-import mixminion.ServerInfo
 import mixminion.TLSConnection
 import mixminion._minionlib as _ml
 from mixminion.Common import MixError, MixFatalError, MixProtocolError, \

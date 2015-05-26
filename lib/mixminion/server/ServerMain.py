@@ -50,6 +50,7 @@ import sys
 import signal
 import time
 import threading
+import urllib2
 from types import *
 # We pull this from mixminion.ThreadUtils just in case somebody still has
 # a copy of the old "mixminion/server/Queue.py" (since renamed to
@@ -67,6 +68,7 @@ import mixminion.server.PacketHandler
 import mixminion.server.ServerQueue
 import mixminion.server.ServerConfig
 import mixminion.server.ServerKeys
+import mixminion.HTTPConnection
 import mixminion.server.EventStats as EventStats
 
 from bisect import insort
@@ -574,6 +576,10 @@ class MixminionServer(_Scheduler):
         createPrivateDir(config.getKeyDir())
         createPrivateDir(config.getQueueDir())
 
+        opener = urllib2.OpenerDirector()
+        opener.add_handler(mixminion.HTTPConnection.HTTPHandler())
+        urllib2.install_opener(opener)
+
         # Try to read the keyring.  If we have a pre-0.0.4 version of
         # mixminion, we might have some bad server descriptors lying
         # around.  If so, tell the user to run 'mixminiond upgrade.'
@@ -599,8 +605,9 @@ class MixminionServer(_Scheduler):
         self.keyring.createKeysAsNeeded()
         self.keyring.checkDescriptorConsistency()
 
+        self.state_tasks = []
         if self.config['DirectoryServers'].get('Publish'):
-            self.keyring.publishKeys()
+            self.state_tasks.append('publish_keys')
 
         LOG.debug("Initializing packet handler")
         self.packetHandler = mixminion.server.PacketHandler.PacketHandler()
@@ -614,11 +621,7 @@ class MixminionServer(_Scheduler):
         self.dirClient = mixminion.ClientDirectory.ClientDirectory(
             os.path.join(config.getWorkDir(),"dir"))
         self.dirClient.configure(config)
-        try:
-            self.dirClient.updateDirectory()
-        except mixminion.ClientDirectory.GotInvalidDirectoryError, e:
-            LOG.warn(str(e))
-            LOG.warn("   (I'll use the old one until I get one that's good.)")
+        self.state_tasks.append('download_directory')
 
         self.dirClient._installAsKeyIDResolver()
 
@@ -665,6 +668,8 @@ class MixminionServer(_Scheduler):
         self.mmtpServer.connectQueues(incoming=self.incomingQueue,
                                       outgoing=self.outgoingQueue)
         self.mmtpServer.connectDNSCache(self.dnsCache)
+        self.state_tasks += ['prepare', 'run']
+        self._state = self.state_tasks.pop(0)
 
     def updateKeys(self, lock=1):
         """Change the keys used by the PacketHandler and MMTPServer objects
@@ -788,6 +793,7 @@ class MixminionServer(_Scheduler):
         self.SCHEDULE_INTERVAL = 60
         self._timeLeft = self.SCHEDULE_INTERVAL
         self._nextEvent = now + self.SCHEDULE_INTERVAL
+        self._state = self.state_tasks.pop(0)
 
     def run(self):
         self.prepare_run()
@@ -796,32 +802,51 @@ class MixminionServer(_Scheduler):
                 break
 
     def run_step(self, timeout=0):
-        global GOT_HUP
-        # Handle pending network events
-        self.mmtpServer.process(timeout)
-        self.dnsCache.process()
-        # Check for signals
-        if STOPPING:
-            LOG.info("Caught SIGTERM; shutting down.")
-            return False
-        elif GOT_HUP:
-            LOG.info("Caught SIGHUP")
-            self.doReset()
-            GOT_HUP = 0
+        while True:
+            if self._state == 'publish_keys':
+                published = self.keyring.publishKeys()
+                if published:
+                    self._state = self.state_tasks.pop(0)
+                break
+            elif self._state == 'download_directory':
+                try:
+                    if self.dirClient.updateDirectory():
+                        self._state = self.state_tasks.pop(0)
+                except mixminion.ClientDirectory.GotInvalidDirectoryError, e:
+                    LOG.warn(str(e))
+                    LOG.warn("   (I'll use the old one until I get one that's good.)")
+                    self._state = self.state_tasks.pop(0)
+            elif self._state == 'prepare':
+                self.prepare_run()
+            elif self._state == 'run':
+                global GOT_HUP
+                # Handle pending network events
+                self.mmtpServer.process(timeout)
+                self.dnsCache.process()
+                # Check for signals
+                if STOPPING:
+                    LOG.info("Caught SIGTERM; shutting down.")
+                    return False
+                elif GOT_HUP:
+                    LOG.info("Caught SIGHUP")
+                    self.doReset()
+                    GOT_HUP = 0
 
-        # Calculate remaining time until the next event.
-        now = time.time()
-        if now > self._nextTick:
-            self.mmtpServer.tick()
-            self._nextTick = now + self.mmtpServer.TICK_INTERVAL
-        self._timeLeft = self._nextEvent - now
+                # Calculate remaining time until the next event.
+                now = time.time()
+                if now > self._nextTick:
+                    self.mmtpServer.tick()
+                    self._nextTick = now + self.mmtpServer.TICK_INTERVAL
+                self._timeLeft = self._nextEvent - now
 
-        if self._timeLeft < 0:
-            # An event has fired.
-            self.processEvents()
-            now = time.time()
-            self._nextTick = now + self.mmtpServer.TICK_INTERVAL
-            self._timeLeft = self.SCHEDULE_INTERVAL
+                if self._timeLeft < 0:
+                    # An event has fired.
+                    self.processEvents()
+                    now = time.time()
+                    self._nextTick = now + self.mmtpServer.TICK_INTERVAL
+                    self._timeLeft = self.SCHEDULE_INTERVAL
+            else:
+                raise ValueError("Unknown server state")
         return True
 
 

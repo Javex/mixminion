@@ -115,6 +115,7 @@ class ClientDirectory:
             self.clean()
         finally:
             self._diskLock.release()
+        self._download_state = None
 
     def configure(self, config):
         """Adjust this ClientDirectory to account for blocked servers."""
@@ -143,9 +144,10 @@ class ClientDirectory:
             now = time.time()
 
         if forceDownload or self.lastDownload < previousMidnight(now):
-            self.downloadDirectory(timeout=timeout)
+            return self.downloadDirectory(timeout=timeout)
         else:
             LOG.debug("Directory is up to date.")
+            return True
 
     def downloadDirectory(self, timeout=None):
         """Download a new directory from the network, validate it, and
@@ -161,7 +163,7 @@ class ClientDirectory:
             self._lock.write_out()
 
         try:
-            self._downloadDirectory(timeout)
+            return self._downloadDirectory(timeout)
         finally:
             self._lock.write_in()
             self.__downloading = 0
@@ -172,89 +174,92 @@ class ClientDirectory:
         """Helper: implements downloadDirectory but doesn't hold lock."""
         # Start downloading the directory.
         url = self.config['DirectoryServers']['ServerURL']
-        LOG.info("Downloading directory from %s", url)
+        if self._download_state is None:
+            LOG.info("Downloading directory from %s", url)
+            self._epoll = mixminion.AsyncUtils.AsyncServer()
 
-        # XXXX Refactor download logic.
-        if timeout: mixminion.NetUtils.setGlobalTimeout(timeout)
-        try:
+            # XXXX Refactor download logic.
+            if timeout: mixminion.NetUtils.setGlobalTimeout(timeout)
             try:
-                # Tell HTTP proxies and their ilk not to cache the directory.
-                # Really, the directory server should set an Expires header
-                # in its response, but that's harder.
-                request = urllib2.Request(url,
-                          headers={ 'Pragma' : 'no-cache',
-                                    'Cache-Control' : 'no-cache', })
-                infile = urllib2.urlopen(request)
-            except IOError, e:
-                raise UIError(
-                    ("Couldn't connect to directory server: %s.\n"
-                     "Try '-D no' to run without downloading a directory.")%e)
-            except socket.error, e:
-                if mixminion.NetUtils.exceptionIsTimeout(e):
-                    raise UIError("Connection to directory server timed out")
-                else:
-                    raise UIError("Error connecting to directory server: %s"%e)
-        finally:
-            if timeout:
-                mixminion.NetUtils.unsetGlobalTimeout()
-
-        # Open a temporary output file.
-        if url.endswith(".gz"):
-            fname = os.path.join(self.dir, "dir_new.gz")
-            outfile = open(fname, 'wb')
-            gz = 1
-        else:
-            fname = os.path.join(self.dir, "dir_new")
-            outfile = open(fname, 'w')
-            gz = 0
-        # Read the file off the network.
-        while 1:
-            s = infile.read(1<<16)
-            if not s: break
-            outfile.write(s)
-        # Close open connections.
-        infile.close()
-        outfile.close()
-        # Open and validate the directory
-        LOG.info("Validating directory")
-
-        self._lock.read_in()
-        digestMap = self.digestMap
-        self._lock.read_out()
-
-        try:
-            directory = mixminion.ServerInfo.ServerDirectory(
-                fname=fname,
-                validatedDigests=digestMap)
-        except mixminion.Config.ConfigError, e:
-            raise GotInvalidDirectoryError(
-                "Received an invalid directory: %s"%e)
-
-        # Make sure that the identity is as expected.
-        identity = directory['Signature']['DirectoryIdentity']
-        fp = self.config['DirectoryServers']['Fingerprint']
-        if fp and mixminion.Crypto.pk_fingerprint(identity) != fp:
-            raise MixFatalError("Bad identity key on directory")
-
-        self._lock.write_in()
-        try:
-            self._diskLock.acquire()
-            try:
-                # Install the new directory
-                tryUnlink(os.path.join(self.dir, "cache"))
-                if gz:
-                    replaceFile(fname, os.path.join(self.dir, "dir.gz"))
-                else:
-                    replaceFile(fname, os.path.join(self.dir, "dir"))
+                try:
+                    # Tell HTTP proxies and their ilk not to cache the directory.
+                    # Really, the directory server should set an Expires header
+                    # in its response, but that's harder.
+                    request = urllib2.Request(url,
+                              headers={ 'Pragma' : 'no-cache',
+                                        'Cache-Control' : 'no-cache', })
+                    self.request = urllib2.urlopen(request)
+                except IOError, e:
+                    raise UIError(
+                        ("Couldn't connect to directory server: %s.\n"
+                         "Try '-D no' to run without downloading a directory.")%e)
+                except socket.error, e:
+                    if mixminion.NetUtils.exceptionIsTimeout(e):
+                        raise UIError("Connection to directory server timed out")
+                    else:
+                        raise UIError("Error connecting to directory server: %s"%e)
             finally:
-                self._diskLock.release()
-        finally:
-            self._lock.write_out()
+                if timeout:
+                    mixminion.NetUtils.unsetGlobalTimeout()
+            self._epoll.register(self.request)
+            self._download_state = 'processing'
+        elif self._download_state == 'processing':
+            self._epoll.process(0)
+            if not self._epoll.connections:
+                # Open a temporary output file.
+                if url.endswith(".gz"):
+                    fname = os.path.join(self.dir, "dir_new.gz")
+                    outfile = open(fname, 'wb')
+                    gz = 1
+                else:
+                    fname = os.path.join(self.dir, "dir_new")
+                    outfile = open(fname, 'w')
+                    gz = 0
+                # Read the file off the network.
+                outfile.write(self.request.response.read())
+                # Close open connections.
+                outfile.close()
+                # Open and validate the directory
+                LOG.info("Validating directory")
 
-        # And regenerate the cache.
-        self.rescan()
-        # FFFF Actually, we could be a bit more clever here, and same some
-        # FFFF time. But that's for later.
+                self._lock.read_in()
+                digestMap = self.digestMap
+                self._lock.read_out()
+
+                try:
+                    directory = mixminion.ServerInfo.ServerDirectory(
+                        fname=fname,
+                        validatedDigests=digestMap)
+                except mixminion.Config.ConfigError, e:
+                    raise GotInvalidDirectoryError(
+                        "Received an invalid directory: %s"%e)
+
+                # Make sure that the identity is as expected.
+                identity = directory['Signature']['DirectoryIdentity']
+                fp = self.config['DirectoryServers']['Fingerprint']
+                if fp and mixminion.Crypto.pk_fingerprint(identity) != fp:
+                    raise MixFatalError("Bad identity key on directory")
+
+                self._lock.write_in()
+                try:
+                    self._diskLock.acquire()
+                    try:
+                        # Install the new directory
+                        tryUnlink(os.path.join(self.dir, "cache"))
+                        if gz:
+                            replaceFile(fname, os.path.join(self.dir, "dir.gz"))
+                        else:
+                            replaceFile(fname, os.path.join(self.dir, "dir"))
+                    finally:
+                        self._diskLock.release()
+                finally:
+                    self._lock.write_out()
+
+                # And regenerate the cache.
+                self.rescan()
+                # FFFF Actually, we could be a bit more clever here, and same some
+                # FFFF time. But that's for later.
+                return True
 
     def rescan(self, force=None, now=None):
         """Regenerate the cache based on files on the disk."""
