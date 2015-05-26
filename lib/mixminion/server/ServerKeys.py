@@ -1197,7 +1197,7 @@ def _guessLocalIP():
     # name is.
     ainfo = None
     try:
-        ainfo = socket.getaddrinfo(socket.gethostname(), None)
+        ainfo = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
     except socket.error:
         try:
             ainfo = socket.getaddrinfo(socket.getfqdn(), None, socket.AF_INET)
