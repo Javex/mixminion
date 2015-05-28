@@ -796,7 +796,6 @@ class MixminionServer(_Scheduler):
         self._state = self.state_tasks.pop(0)
 
     def run(self):
-        self.prepare_run()
         while 1:
             if not self.run_step(self.mmtpServer.TICK_INTERVAL):
                 break
