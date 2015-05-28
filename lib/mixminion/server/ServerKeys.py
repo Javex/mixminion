@@ -238,34 +238,36 @@ class ServerKeyring:
             if not keySets:
                 LOG.trace("publishKeys: no unpublished keys found")
                 return True
-        if self._publish_state is None:
-            if allKeys:
-                LOG.info("Republishing all known keys to directory server")
-            else:
-                LOG.info("Publishing %s keys to directory server...",len(keySets))
-
-            self._epoll = mixminion.AsyncUtils.AsyncServer()
-            for ks in keySets:
-                conn = ks.prepare_publish(self.config['DirectoryServers']['PublishURL'])
-                self._epoll.register(conn)
-            self._publish_state = 'processing'
-        elif self._publish_state == 'processing':
-            self._epoll.process(0)
-            if not self._epoll.connections:
-                rejected_count = 0
-                for ks in keySets:
-                    status = ks.finish_publish()
-                if status == 'error':
-                    LOG.error("Error publishing a key; giving up")
-                    return True
-                elif status == 'reject':
-                    rejected_count += 1
-                self._publish_state = None
-                if rejected_count == 0:
-                    LOG.info("All keys published successfully.")
+        while True:
+            if self._publish_state is None:
+                if allKeys:
+                    LOG.info("Republishing all known keys to directory server")
                 else:
-                    LOG.info("%s/%s keys were rejected." , rejected_count, len(keySets))
-                return True
+                    LOG.info("Publishing %s keys to directory server...",len(keySets))
+
+                self._epoll = mixminion.AsyncUtils.AsyncServer()
+                for ks in keySets:
+                    conn = ks.prepare_publish(self.config['DirectoryServers']['PublishURL'])
+                    self._epoll.register(conn)
+                self._publish_state = 'processing'
+            elif self._publish_state == 'processing':
+                self._epoll.process(0)
+                if not self._epoll.connections:
+                    rejected_count = 0
+                    for ks in keySets:
+                        status = ks.finish_publish()
+                    if status == 'error':
+                        LOG.error("Error publishing a key; giving up")
+                        return True
+                    elif status == 'reject':
+                        rejected_count += 1
+                    self._publish_state = None
+                    if rejected_count == 0:
+                        LOG.info("All keys published successfully.")
+                    else:
+                        LOG.info("%s/%s keys were rejected." , rejected_count, len(keySets))
+                    return True
+                break
         else:
             raise ValueError("Unknown publish state")
 
