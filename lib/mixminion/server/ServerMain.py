@@ -815,6 +815,7 @@ class MixminionServer(_Scheduler):
                     LOG.warn(str(e))
                     LOG.warn("   (I'll use the old one until I get one that's good.)")
                     self._state = self.state_tasks.pop(0)
+                break
             elif self._state == 'prepare':
                 self.prepare_run()
             elif self._state == 'run':
@@ -844,6 +845,7 @@ class MixminionServer(_Scheduler):
                     now = time.time()
                     self._nextTick = now + self.mmtpServer.TICK_INTERVAL
                     self._timeLeft = self.SCHEDULE_INTERVAL
+                break
             else:
                 raise ValueError("Unknown server state")
         return True

@@ -246,21 +246,27 @@ class ServerKeyring:
                     LOG.info("Publishing %s keys to directory server...",len(keySets))
 
                 self._epoll = mixminion.AsyncUtils.AsyncServer()
+                self._pending_keysets = {}
                 for ks in keySets:
-                    conn = ks.prepare_publish(self.config['DirectoryServers']['PublishURL'])
-                    self._epoll.register(conn)
+                    try:
+                        conn = ks.prepare_publish(self.config['DirectoryServers']['PublishURL'])
+                        self._pending_keysets[conn] = ks
+                    except:
+                        pass
+                    else:
+                        self._epoll.register(conn)
                 self._publish_state = 'processing'
             elif self._publish_state == 'processing':
                 self._epoll.process(0)
                 if not self._epoll.connections:
                     rejected_count = 0
-                    for ks in keySets:
+                    for ks in self._pending_keysets.values():
                         status = ks.finish_publish()
-                    if status == 'error':
-                        LOG.error("Error publishing a key; giving up")
-                        return True
-                    elif status == 'reject':
-                        rejected_count += 1
+                        if status == 'error':
+                            LOG.error("Error publishing a key; giving up")
+                            return True
+                        elif status == 'reject':
+                            rejected_count += 1
                     self._publish_state = None
                     if rejected_count == 0:
                         LOG.info("All keys published successfully.")
