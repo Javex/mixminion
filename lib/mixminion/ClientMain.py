@@ -236,6 +236,8 @@ class MixminionClient:
 
         self.async = mixminion.MMTPClient.AsyncClientHandler()
         self.async_data = {}
+        self.out_items = []
+        self._current_out_item = None
 
     def _sortPackets(self, packets, shuffle=1):
         """Helper function.  Takes a list of tuples of (packet,
@@ -262,10 +264,34 @@ class MixminionClient:
                 self.prng.shuffle(pktList)
         return result
 
+    def _prepare_packets(self, allPackets, forceQueue=0, forceNoQueue=0):
+        out_item = {
+          'force_queue': forceQueue,
+          'force_no_queue': forceNoQueue,
+          'items': [],
+        }
+        for routing, packets in self._sortPackets(allPackets):
+            out_item['items'].append((routing, packets))
+        self.out_items.append(out_item)
 
-    def sendForwardMessage(self, directory, address, pathSpec, message,
-                           startAt, endAt, forceQueue=0, forceNoQueue=0,
-                           forceNoServerSideFragments=0):
+    def prepareForwardMessage(
+            self, directory, address, pathSpec, message, startAt, endAt,
+            forceQueue=0, forceNoQueue=0, forceNoServerSideFragments=0):
+        assert not (forceQueue and forceNoQueue)
+
+        allPackets = self.generateForwardPackets(
+            directory, address, pathSpec, message, forceNoServerSideFragments,
+            startAt, endAt)
+        self._prepare_packets(allPackets, forceQueue, forceNoQueue)
+
+    def prepareReplyMessage(
+            self, directory, address, pathSpec, surbList, message,
+            startAt, endAt, forceQueue=0, forceNoQueue=0):
+        allPackets = self.generateReplyPackets(
+            directory, address, pathSpec, message, surbList, startAt, endAt)
+        self._prepare_packets(allPackets, forceQueue, forceNoQueue)
+
+    def sendForwardMessage(self, *args, **kw):
         """Generate and send a forward message.
             directory -- an instance of ClientDirectory; used to generate
                paths.
@@ -284,17 +310,16 @@ class MixminionClient:
                the eventual recipient rather than having the exit server
                defragment them.
         """
+        self.prepareForwardMessage(*args, **kw)
         assert not (forceQueue and forceNoQueue)
-
-        allPackets = self.generateForwardPackets(
-            directory, address, pathSpec, message, forceNoServerSideFragments,
-            startAt, endAt)
-
-        for routing, packets in self._sortPackets(allPackets):
-            if forceQueue:
-                self.queuePackets(packets, routing)
-            else:
-                self.sendPackets(packets, routing, noQueue=forceNoQueue)
+        for out_item in self.out_items:
+            force_queue = out_item['force_queue']
+            force_no_queue = out_item['force_no_queue']
+            for routing, packets in out_item['items']:
+                if force_queue:
+                    self.queuePackets(packets, routing)
+                else:
+                    self.sendPackets(packets, routing, noQueue=force_no_queue)
 
     def sendReplyMessage(self, directory, address, pathSpec, surbList, message,
                          startAt, endAt, forceQueue=0,
@@ -316,15 +341,16 @@ class MixminionClient:
             forceNoQueue -- if true, do not queue the message even if delivery
                fails.
         """
-        #XXXX write unit tests
-        allPackets = self.generateReplyPackets(
-            directory, address, pathSpec, message, surbList, startAt, endAt)
-
-        for routing, packets in self._sortPackets(allPackets):
-            if forceQueue:
-                self.queuePackets(packets, routing)
-            else:
-                self.sendPackets(packets, routing, noQueue=forceNoQueue)
+        self.prepareReplyMessage(*args, **kw)
+        assert not (forceQueue and forceNoQueue)
+        for out_item in self.out_items:
+            force_queue = out_item['force_queue']
+            force_no_queue = out_item['force_no_queue']
+            for routing, packets in out_item['items']:
+                if force_queue:
+                    self.queuePackets(packets, routing)
+                else:
+                    self.sendPackets(packets, routing, noQueue=force_no_queue)
 
     def generateReplyBlock(self, address, servers, name="", expiryTime=0):
         """Generate an return a new ReplyBlock object.
@@ -485,6 +511,29 @@ class MixminionClient:
         nGood = self.async_data[key]['nGood']
         del self.async_data[key]
         return nGood
+
+    def processPackets(self, timeout=0):
+        if self._current_out_item is None:
+            if not self.out_items:
+                return True
+            self._current_out_item = self.out_items.pop(0)
+            out_item = self._current_out_item
+            self._current_keys = []
+            for key, (routing, packets) in enumerate(out_item['items']):
+                self._current_keys.append(key)
+                self.sendPacketsAsync(
+                    packets, routing, key,
+                    noQueue=out_item['force_no_queue'])
+        if not self.async.is_done():
+            self.process()
+        else:
+            self.finishPacketsAsync()
+            for key in self._current_keys:
+                del self.async_data[key]
+            self._current_keys = None
+            self._current_out_item = None
+            if not self.out_items:
+                return True
 
     def sendPacketsAsync(
             self, pktList, routingInfo, data_key, noQueue=0, lazyQueue=0,
@@ -990,18 +1039,29 @@ class CLIArgumentParser:
             self.directory._installAsKeyIDResolver()
 
         if self.wantDownload:
+            self._state = 'download_directory'
+            self.process()
+        else:
+            self._state = 'done'
+
+        if self.wantClientDirectory or self.wantDownload:
+            self.directory.checkSoftwareVersion(client=1)
+
+    def process(self):
+        if self._state == 'done':
+            return True
+        elif self._state == 'download_directory':
             assert self.wantClientDirectory
             timeout = int(self.config['DirectoryServers']['DirectoryTimeout'])
             if self.download != 0:
                 clientLock()
                 try:
-                    self.directory.updateDirectory(forceDownload=self.download,
-                                                   timeout=timeout)
+                    if self.directory.updateDirectory(
+                            forceDownload=self.download, timeout=timeout):
+                        self._state = 'done'
+                        return True
                 finally:
                     clientUnlock()
-
-        if self.wantClientDirectory or self.wantDownload:
-            self.directory.checkSoftwareVersion(client=1)
 
     def parsePath(self):
         # Sets: exitAddress, pathSpec.
