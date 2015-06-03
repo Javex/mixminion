@@ -339,7 +339,7 @@ class DeliveryQueue:
         finally:
             self._lock.release()
 
-    def sendReadyMessages(self, now=None):
+    def sendReadyMessages(self, async, now=None):
         """Sends all messages which are not already being sent, and which
            are scheduled to be sent."""
         assert self.retrySchedule is not None
@@ -376,10 +376,10 @@ class DeliveryQueue:
             self._lock.release()
 
         if messages:
-            self._deliverMessages(messages)
+            self._deliverMessages(messages, async)
         self._repOk()
 
-    def _deliverMessages(self, msgList):
+    def _deliverMessages(self, msgList, async):
         """Abstract method; Invoked with a list of PendingMessage objects
            every time we have a batch of messages to send.
 

@@ -337,7 +337,7 @@ class OutgoingQueue(mixminion.server.ServerQueue.DeliveryQueue):
         self.server = server
         self.incomingQueue = incoming
 
-    def _deliverMessages(self, msgList):
+    def _deliverMessages(self, msgList, async):
         "Implementation of abstract method from DeliveryQueue."
         # Map from addr -> [ (handle, msg) ... ]
         pkts = {}
@@ -885,9 +885,9 @@ class MixminionServer(_Scheduler):
             self.mixPool.unlock()
 
         # Send outgoing packets
-        self.outgoingQueue.sendReadyMessages()
+        self.outgoingQueue.sendReadyMessages(self.mmtpServer)
         # Send exit messages
-        self.moduleManager.sendReadyMessages()
+        self.moduleManager.sendReadyMessages(self.mmtpServer)
 
         # Choose next mix interval
         nextMix = self.mixPool.getNextMixTime(now)

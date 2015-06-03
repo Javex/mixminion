@@ -36,6 +36,7 @@ import mixminion.server.ServerQueue
 import mixminion.server.ServerConfig
 import mixminion.server.EventStats as EventStats
 import mixminion.server.PacketHandler
+import mixminion.SMTPConnection
 from mixminion.Config import ConfigError
 from mixminion.Common import LOG, MixError, ceilDiv, createPrivateDir, \
      encodeBase64, floorDiv, isPrintingAscii, isSMTPMailbox, previousMidnight,\
@@ -171,7 +172,7 @@ class ImmediateDeliveryQueue:
 
         return "<nil>"
 
-    def sendReadyMessages(self):
+    def sendReadyMessages(self, async):
         # We do nothing here; we already delivered the messages
         pass
 
@@ -199,7 +200,25 @@ class SimpleModuleDeliveryQueue(mixminion.server.ServerQueue.DeliveryQueue):
     def getPriority(self):
         return 0
 
-    def _deliverMessages(self, msgList):
+    def _deliverMessages(self, msgList, async):
+
+        def after_send(handle, result):
+            if result == DELIVER_OK:
+                LOG.debug("Successfully delivered message MOD:%s", dh)
+                handle.succeeded()
+                EventStats.log.successfulDelivery() #FFFF
+            elif result == DELIVER_FAIL_RETRY:
+                LOG.debug("Unable to deliver message MOD:%s; will retry",
+                          dh)
+                handle.failed(1)
+                EventStats.log.failedDelivery() #FFFF
+            else:
+                assert result == DELIVER_FAIL_NORETRY
+                LOG.error("Unable to deliver message MOD:%s; giving up",
+                          dh)
+                handle.failed(0)
+                EventStats.log.unretriableDelivery() #FFFF
+
         for handle in msgList:
             try:
                 dh = handle.getHandle() # display handle
@@ -209,24 +228,9 @@ class SimpleModuleDeliveryQueue(mixminion.server.ServerQueue.DeliveryQueue):
                 except mixminion.Filestore.CorruptedFile:
                     packet = None
                 if packet:
-                    result = self.module.processMessage(packet)
+                    result = self.module.processMessage(packet, async)
                 if not packet:
                     pass # Python<2.1 doesn't allow 'continue' inside 'try'.
-                elif result == DELIVER_OK:
-                    LOG.debug("Successfully delivered message MOD:%s", dh)
-                    handle.succeeded()
-                    EventStats.log.successfulDelivery() #FFFF
-                elif result == DELIVER_FAIL_RETRY:
-                    LOG.debug("Unable to deliver message MOD:%s; will retry",
-                              dh)
-                    handle.failed(1)
-                    EventStats.log.failedDelivery() #FFFF
-                else:
-                    assert result == DELIVER_FAIL_NORETRY
-                    LOG.error("Unable to deliver message MOD:%s; giving up",
-                              dh)
-                    handle.failed(0)
-                    EventStats.log.unretriableDelivery() #FFFF
             except:
                 LOG.error_exc(sys.exc_info(),
                                    "Exception delivering message")
@@ -465,16 +469,16 @@ class ModuleManager:
         if self.delivery is not None:
             self.delivery.join()
 
-    def sendReadyMessages(self):
+    def sendReadyMessages(self, async):
         """Begin message delivery, either by telling every module's queue to
            try sending its pending messages, or by telling the delivery
            to do so if we're deliverying."""
         if self.delivery is not None:
-            self.delivery.beginSending()
+            self.delivery.beginSending(async)
         else:
-            self._sendReadyMessages()
+            self._sendReadyMessages(async)
 
-    def _sendReadyMessages(self):
+    def _sendReadyMessages(self, async):
         """Actual implementation of message delivery. Tells every module's
            queue to send pending messages.  This is called directly if
            we aren't deliverying, and from the delivery if we are."""
@@ -482,7 +486,7 @@ class ModuleManager:
                       for queue in self.queues.values() ]
         queuelist.sort()
         for _, queue in queuelist:
-            queue.sendReadyMessages()
+            queue.sendReadyMessages(async)
 
     def getServerInfoBlocks(self):
         """Return a list of strings that should be appended to the server
@@ -685,7 +689,7 @@ class FragmentDeliveryQueue:
         finally:
             self.lock.release()
 
-    def sendReadyMessages(self):
+    def sendReadyMessages(self, async):
         self.lock.acquire()
         try:
             self.pool.unchunkMessages()
@@ -1268,7 +1272,7 @@ class DirectSMTPModule(SMTPModule):
 
         manager.enableModule(self)
 
-    def processMessage(self, packet):
+    def processMessage(self, packet, async):
         assert packet.getExitType() == mixminion.Packet.SMTP_TYPE
         LOG.debug("Received SMTP message")
         # parseSMTPInfo will raise a parse error if the mailbox is invalid.
@@ -1289,7 +1293,7 @@ class DirectSMTPModule(SMTPModule):
             return DELIVER_FAIL_NORETRY
 
         # Send the message.
-        return sendSMTPMessage(self.server, [address], self.returnAddress, msg)
+        return sendSMTPMessage(self.server, [address], self.returnAddress, msg, async)
 
 class MixmasterSMTPModule(SMTPModule):
     """Implements SMTP by relaying messages via Mixmaster nodes.  This
@@ -1406,8 +1410,8 @@ class _MixmasterSMTPModuleDeliveryQueue(SimpleModuleDeliveryQueue):
     """Delivery queue for _MixmasterSMTPModule.  Same as
        SimpleModuleDeliveryQueue, except that we must call flushMixmasterPool
        after queueing messages for Mixmaster."""
-    def _deliverMessages(self, msgList):
-        SimpleModuleDeliveryQueue._deliverMessages(self, msgList)
+    def _deliverMessages(self, msgList, async):
+        SimpleModuleDeliveryQueue._deliverMessages(self, msgList, async)
         self.module.flushMixmasterPool()
 
 #----------------------------------------------------------------------
@@ -1426,7 +1430,7 @@ def checkMailHeaders(headers):
 
 #----------------------------------------------------------------------
 
-def sendSMTPMessage(server, toList, fromAddr, message):
+def sendSMTPMessage(server, toList, fromAddr, message, async):
     """Send a single SMTP message.  The message will be delivered to
        toList, and seem to originate from fromAddr.  We use 'server' as an
        MTA."""
@@ -1436,19 +1440,13 @@ def sendSMTPMessage(server, toList, fromAddr, message):
     # FFFF We should leave the connection open if we're going to send many
     # FFFF messages in a row.
     LOG.debug("Sending message via SMTP host %s to %s", server, toList)
-    con = smtplib.SMTP(server)
-    try:
-        con.sendmail(fromAddr, toList, message)
-        res = DELIVER_OK
-    except (smtplib.SMTPException, socket.error), e:
-        LOG.warn("Unsuccessful SMTP connection to %s: %s",
-                 server, str(e))
-        res = DELIVER_FAIL_RETRY
+    con = mixminion.SMTPConnection.AsyncSMTP(server)
+    async.register(con)
 
-    con.quit()
-    con.close()
-
-    return res
+    def after_send(code, msg):
+        print "%d: %s" % (code, msg)
+        con.quit()
+    con.sendmail(fromAddr, toList, message, callback=after_send)
 
 #----------------------------------------------------------------------
 
