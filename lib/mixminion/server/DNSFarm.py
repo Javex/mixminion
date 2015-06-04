@@ -103,7 +103,6 @@ class DNSCache:
                 msg = mixminion.NetUtils.gai_strerror(ret)
                 raise Exception("Lookup failed: %s" % msg)
             else:
-                results = []
                 addrinfo = request.contents.ar_result
                 addrs = mixminion.NetUtils.get_addrs_from_addrinfo(addrinfo)
                 final_result = mixminion.NetUtils.filter_IPs(addrs, name)
