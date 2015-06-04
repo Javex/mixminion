@@ -49,7 +49,11 @@ def optimizeThroughput(sock):
         # incorrectly.  I'm too chicken to take the chance until
         # I hear differetly.
         return
-    sock.setsockopt(socket.SOL_IP, socket.IP_TOS, IPTOS_THROUGHPUT)
+    try:
+        sock.setsockopt(socket.SOL_IP, socket.IP_TOS, IPTOS_THROUGHPUT)
+    except socket.error as e:
+        if e.errno != errno.ENOSYS:
+            raise
 
 #======================================================================
 if hasattr(socket, 'getaddrinfo'):
