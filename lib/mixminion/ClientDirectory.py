@@ -217,6 +217,7 @@ class ClientDirectory:
                     gz = 0
                 # Read the file off the network.
                 outfile.write(self.request.response.read())
+                self.request.close()
                 # Close open connections.
                 outfile.close()
                 # Open and validate the directory
