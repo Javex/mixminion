@@ -1022,20 +1022,24 @@ class Log:
            This should usually be called as
                LOG.log_exc('ERROR', sys.exc_info(), message, args...)
            """
+        full_message = ''
         if message is not None:
-            self.log(severity, message, *args)
+            full_message += message % args
         elif tb is not None:
             filename = tb.tb_frame.f_code.co_filename
-            self.log(severity, "Unexpected exception in %s", filename)
+            full_message += "\nUnexpected exception in %s", filename
         else:
-            self.log(severity, "Unexpected exception")
+            full_message += "\nUnexpected exception"
 
         formatted = traceback.format_exception(exclass, ex, tb)
         formatted[1:] = [ "  %s" % line for line in formatted[1:] ]
         indented = "".join(formatted)
         if indented.endswith('\n'):
             indented = indented[:-1]
-        self._log(severity, indented, None)
+        if full_message:
+            full_message += "\n"
+        full_message += indented
+        self._log(severity, full_message, None)
 
     def error_exc(self, (exclass, ex, tb), message=None, *args):
         "Same as log_exc, but logs an error message."
