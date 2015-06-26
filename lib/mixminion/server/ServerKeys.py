@@ -728,16 +728,7 @@ class ServerKeyset:
         fname = self.getDescriptorFileName()
         descriptor = readFile(fname)
         fields = urllib.urlencode({"desc" : descriptor})
-        self.request = None
-        try:
-            self.request = urllib2.urlopen(url, fields)
-        except IOError, e:
-            LOG.error("Error while publishing server descriptor: %s",e)
-            return 'error'
-        except:
-            LOG.error_exc(sys.exc_info(),
-                          "Error publishing server descriptor")
-            return 'error'
+        self.request = urllib2.urlopen(url, fields)
         return self.request
 
     def finish_publish(self):
