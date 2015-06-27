@@ -65,7 +65,7 @@ class ServerConfig(mixminion.Config._ConfigFile):
         if server['PublicKeyOverlap'].getSeconds() > 72*60*60:
             raise ConfigError("PublicKeyOverlap must be <= 72 hours")
 
-        if _haveEntry(self, 'Server', 'Mode'):
+        if _haveEntry(self, 'Server', 'Mode') and server['Mode'] != 'relay':
             LOG.warn("Mode specification is not yet supported.")
 
         mixInterval = server['MixInterval'].getSeconds()
