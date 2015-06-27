@@ -776,7 +776,7 @@ class MixminionServer(_Scheduler):
 
         # This is the last possible moment to shut down the console log, so
         # we have to do it now.
-        mixminion.Common.LOG.configure(self.config, keepStderr=_ECHO_OPT)
+        # mixminion.Common.LOG.configure(self.config, keepStderr=_ECHO_OPT)
         if self.config['Server'].get("Daemon",1):
             closeUnusedFDs()
 
