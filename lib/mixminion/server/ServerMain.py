@@ -806,7 +806,8 @@ class MixminionServer(_Scheduler):
                 published = self.keyring.publishKeys()
                 if published:
                     self._state = self.state_tasks.pop(0)
-                break
+                else:
+                    break
             elif self._state == 'download_directory':
                 try:
                     if self.dirClient.updateDirectory():
@@ -815,7 +816,8 @@ class MixminionServer(_Scheduler):
                     LOG.warn(str(e))
                     LOG.warn("   (I'll use the old one until I get one that's good.)")
                     self._state = self.state_tasks.pop(0)
-                break
+                if self._state == 'download_directory':
+                    break
             elif self._state == 'prepare':
                 self.prepare_run()
             elif self._state == 'run':
