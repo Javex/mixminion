@@ -51,6 +51,7 @@ import signal
 import time
 import threading
 import urllib2
+import timerfd
 from types import *
 # We pull this from mixminion.ThreadUtils just in case somebody still has
 # a copy of the old "mixminion/server/Queue.py" (since renamed to
@@ -413,7 +414,46 @@ def installSignalHandlers():
 
 #----------------------------------------------------------------------
 
-class _Scheduler:
+class _Event(object):
+
+    def __init__(self, when, name, cb):
+        # Store parameters
+        self.name = name
+        self.cb = cb
+        self.when = when
+
+        # Create timerfd with correct point in time
+        # Calculate time interval from absolute time
+        now = time.time()
+        relative_when = when - now
+        assert relative_when > 0
+        LOG.debug("Scheduling event %s to call %s at time %s which is %s seconds from now" % (name, cb, when, relative_when))
+        # Split it by secs and nanosecs
+        self.timerfd = timerfd.timerfd(timerfd.CLOCK_MONOTONIC, timerfd.TFD_NONBLOCK)
+        self.timerfd.settime(0, value=relative_when)
+
+    def __del__(self):
+        self.timerfd.close()
+
+    def process(self, r, w, x, cap):
+        LOG.debug("Event %s passed, calling %s" % (self.name, self.cb))
+        timer_passed_cnt = self.timerfd.get_count()
+        assert timer_passed_cnt == 1, "Unexpected timer passed count: %s" % timer_passed_cnt
+        self.cb()
+        return 0, 0, 0, 0
+
+    def getStatus(self):
+        return 1, 0, 1
+
+    def fileno(self):
+        return self.timerfd.fileno()
+
+    def tryTimeout(self, cutoff):
+        # This is a time, it has no timeout
+        return False
+
+
+class _Scheduler(object):
     """Mixin class for server.  Implements a priority queue of ongoing,
        scheduled tasks with a loose (few seconds) granularity.
     """
@@ -422,34 +462,13 @@ class _Scheduler:
     #       Sorted by time.  We could use a heap here instead, but
     #       that doesn't turn into a net benefit until we have a hundred
     #       events or so.
-    def __init__(self):
-        """Create a new _Scheduler"""
-        self.scheduledEvents = []
-        self.schedLock = threading.RLock()
-
-    def firstEventTime(self):
-        """Return the time at which the earliest-scheduled event is
-           supposed to occur.  Returns -1 if no events.
-        """
-        self.schedLock.acquire()
-        try:
-            if self.scheduledEvents:
-                return self.scheduledEvents[0][0]
-            else:
-                return -1
-        finally:
-            self.schedLock.release()
 
     def scheduleOnce(self, when, name, cb):
         """Schedule a callback function, 'cb', to be invoked at time 'when.'
         """
         assert type(name) is StringType
         assert type(when) in (IntType, LongType, FloatType)
-        try:
-            self.schedLock.acquire()
-            insort(self.scheduledEvents, (when, name, cb))
-        finally:
-            self.schedLock.release()
+        self.mmtpServer.register(_Event(when, name, cb))
 
     def scheduleRecurring(self, first, interval, name, cb):
         """Schedule a callback function 'cb' to be invoked at time 'first,'
@@ -473,33 +492,6 @@ class _Scheduler:
         assert type(name) is StringType
         assert type(first) in (IntType, LongType, FloatType)
         self.scheduleOnce(first, name, _RecurringEvent(name, cb, self))
-
-    def processEvents(self, now=None):
-        """Run all events that are scheduled to occur before 'now'.
-
-           Note: if an event reschedules itself for a time _before_ now,
-           it will only be run once per invocation of processEvents.
-
-           The right way to run this class is something like:
-               while 1:
-                   interval = time.time() - scheduler.firstEventTime()
-                   if interval > 0:
-                       time.sleep(interval)
-                       # or maybe, select.select(...,...,...,interval)
-                   scheduler.processEvents()
-        """
-        if now is None: now = time.time()
-        self.schedLock.acquire()
-        try:
-            se = self.scheduledEvents
-            cbs = []
-            while se and se[0][0] <= now:
-                cbs.append(se[0][2])
-                del se[0]
-        finally:
-            self.schedLock.release()
-        for cb in cbs:
-            cb()
 
 class _RecurringEvent:
     """helper for _Scheduler. Calls a callback, then reschedules it."""
@@ -790,9 +782,6 @@ class MixminionServer(_Scheduler):
 
         now = time.time()
         self._nextTick = now + self.mmtpServer.TICK_INTERVAL
-        self.SCHEDULE_INTERVAL = 60
-        self._timeLeft = self.SCHEDULE_INTERVAL
-        self._nextEvent = now + self.SCHEDULE_INTERVAL
         self._state = self.state_tasks.pop(0)
 
     def run(self):
@@ -839,14 +828,6 @@ class MixminionServer(_Scheduler):
                 if now > self._nextTick:
                     self.mmtpServer.tick()
                     self._nextTick = now + self.mmtpServer.TICK_INTERVAL
-                self._timeLeft = self._nextEvent - now
-
-                if self._timeLeft < 0:
-                    # An event has fired.
-                    self.processEvents()
-                    now = time.time()
-                    self._nextTick = now + self.mmtpServer.TICK_INTERVAL
-                    self._timeLeft = self.SCHEDULE_INTERVAL
                 break
             else:
                 raise ValueError("Unknown server state")
