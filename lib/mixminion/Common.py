@@ -743,34 +743,10 @@ def secureDelete(fnames, blocking=0):
     if isinstance(fnames, StringType):
         fnames = [fnames]
 
-    if not _SHRED_CMD:
-        for f in fnames:
-            _overwriteFile(f)
-            os.unlink(f)
-        return None
-
-    # Some systems are unhappy when you call them with too many options.
-    for i in xrange(0, len(fnames), 250-len(_SHRED_OPTS)):
-        files = fnames[i:i+250-len(_SHRED_OPTS)]
-        try:
-            #XXXX008 if blocking, we should just call this with P_WAIT.
-            pid = os.spawnl(os.P_NOWAIT,
-                            _SHRED_CMD, _SHRED_CMD, *(_SHRED_OPTS+files))
-        except OSError, e:
-            if e.errno not in (errno.EAGAIN, errno.ENOMEM):
-                raise
-            LOG.warn("Transient error while shredding files: %s",e)
-            for f in files:
-                if os.path.exists(f):
-                    _overwriteFile(f)
-                    os.unlink(f)
-        else:
-            if blocking:
-                try:
-                    os.waitpid(pid, 0)
-                except OSError:
-                    # sigchild handler might get to the pid first.
-                    pass
+    for f in fnames:
+        _overwriteFile(f)
+        os.unlink(f)
+    return None
 
 #----------------------------------------------------------------------
 # Logging
