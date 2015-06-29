@@ -127,6 +127,10 @@ class AsyncSMTP(smtplib.SMTP):
 
         return self.want_read, self.want_write, self.open, 0
 
+    def tryTimeout(self, cutoff):
+        # Whatever, just ignore the damn thing
+        return False
+
     def starttls(self, *args, **kw):
         raise NotImplementedError("StartTLS not supported")
 

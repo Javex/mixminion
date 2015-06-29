@@ -449,7 +449,7 @@ class _Event(object):
         return self.timerfd.fileno()
 
     def tryTimeout(self, cutoff):
-        # This is a time, it has no timeout
+        # This is a timer, it has no timeout
         return False
 
 
@@ -623,7 +623,8 @@ class MixminionServer(_Scheduler):
         # FFFF needs to.
         LOG.debug("Initializing delivery module")
         self.moduleManager = config.getModuleManager()
-        self.moduleManager.configure(config)
+        if not self.moduleManager.isConfigured():
+            self.moduleManager.configure(config)
 
         queueDir = config.getQueueDir()
 
