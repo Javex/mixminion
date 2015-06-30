@@ -347,6 +347,7 @@ SERVER_SYNTAX =  {
                      'MixInterval' : ('ALLOW', "interval", "30 min"),
                      'MixPoolRate' : ('ALLOW', "fraction", "60%"),
                      'MixPoolMinSize' : ('ALLOW', "int", "5"),
+                     'OptimizeThroughput': ('ALLOW', 'boolean', 'yes'),
 		     'Timeout' : ('ALLOW', "interval", "5 min"),
                      'MaxBandwidth' : ('ALLOW', "size", None),
                      'MaxBandwidthSpike' : ('ALLOW', "size", None),

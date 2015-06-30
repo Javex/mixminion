@@ -348,6 +348,7 @@ class MMTPAsyncServer(AsyncServer):
             self.register(listener)
 
         self._timeout = config['Server']['Timeout'].getSeconds()
+        self._optimizeThroughput = config['Server']['OptimizeThroughput']
         self.clientConByAddr = {}
         self.certificateCache = PeerCertificateCache()
         self.dnsCache = None
@@ -504,7 +505,8 @@ class MMTPAsyncServer(AsyncServer):
             finished = lambda addr=addr, self=self: self.__clientFinished(addr)
             con = MMTPClientConnection(
                 family, ip, port, keyID, serverName=serverName,
-                context=self.clientContext, certCache=self.certificateCache)
+                context=self.clientContext, certCache=self.certificateCache,
+                optimizeThroughput=self._optimizeThroughput)
             #con.allPacketsSent = finished #XXXX007 wrong!
             con.onClosed = finished
         except (socket.error, MixProtocolError), e:

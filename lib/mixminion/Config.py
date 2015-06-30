@@ -999,7 +999,8 @@ class ClientConfig(_ConfigFile):
                        'SURBPathLength' : ('ALLOW', None, None),
                        },
         'Network' : { 'ConnectionTimeout' : ('ALLOW', "interval", None),
-                      'Timeout' : ('ALLOW', "interval", None) }
+                      'Timeout' : ('ALLOW', "interval", None),
+                      'OptimizeThroughput': ('ALLOW', 'boolean', 'yes') }
 
         }
     def __init__(self, fname=None, string=None):

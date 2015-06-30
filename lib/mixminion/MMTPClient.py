@@ -88,7 +88,8 @@ class MMTPClientConnection(mixminion.TLSConnection.TLSConnection):
     # External interface
     ####
     def __init__(self, targetFamily, targetAddr, targetPort, targetKeyID,
-                 serverName=None, context=None, certCache=None):
+                 serverName=None, context=None, certCache=None,
+                 optimizeThroughput=True):
         """Initialize a new MMTPClientConnection."""
         assert targetFamily in (mixminion.NetUtils.AF_INET,
                                 mixminion.NetUtils.AF_INET6)
@@ -99,6 +100,7 @@ class MMTPClientConnection(mixminion.TLSConnection.TLSConnection):
                 IPV4Info(targetAddr, targetPort, targetKeyID))
         if certCache is None:
             certCache = PeerCertificateCache()
+        self.optimizeThroughput = optimizeThroughput
 
         self.targetAddr = targetAddr
         self.targetPort = targetPort
@@ -274,7 +276,8 @@ class MMTPClientConnection(mixminion.TLSConnection.TLSConnection):
                   self.address, self.protocol)
 
         # Now that we're connected, optimize for throughput.
-        mixminion.NetUtils.optimizeThroughput(self.sock)
+        if self.optimizeThroughput:
+            mixminion.NetUtils.optimizeThroughput(self.sock)
 
         self.onRead = self.onDataRead
         self.onWrite = self.onDataWritten
@@ -356,8 +359,9 @@ class MMTPClientConnection(mixminion.TLSConnection.TLSConnection):
 
 class AsyncClientHandler(mixminion.AsyncUtils.AsyncServer):
 
-    def __init__(self):
+    def __init__(self, optimizeThroughput=True):
         self.data = {}
+        self._optimizeThroughput = optimizeThroughput
         mixminion.AsyncUtils.AsyncServer.__init__(self)
 
     def startSending(self, routing, packetList, key, callback=None):
@@ -376,7 +380,9 @@ class AsyncClientHandler(mixminion.AsyncUtils.AsyncServer):
         # Create an MMTPClientConnection
         try:
             con = MMTPClientConnection(
-                family, addr, routing.port, routing.keyinfo, serverName=serverName)
+                family, addr, routing.port, routing.keyinfo,
+                serverName=serverName,
+                optimizeThroughput=self._optimizeThroughput)
         except socket.error, e:
             raise MixProtocolError(str(e))
         self.register(con)
@@ -443,7 +449,8 @@ class DeliverableString(DeliverableMessage):
         self.s = None
         self._failed = 1
 
-def sendPackets(routing, packetList, timeout=300, callback=None):
+def sendPackets(routing, packetList, timeout=300, callback=None,
+        optimizeThroughput=True):
     """Sends a list of packets to a server.  Raise MixProtocolError on
        failure.
 
@@ -459,7 +466,7 @@ def sendPackets(routing, packetList, timeout=300, callback=None):
        callback -- None, or a function to call with a index into packetList
            after each successful packet delivery.
     """
-    async = AsyncClientHandler()
+    async = AsyncClientHandler(optimizeThroughput=optimizeThroughput)
     key = 0
     async.startSending(routing, packetList, key, callback)
     while not async.is_done():

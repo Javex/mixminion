@@ -234,7 +234,8 @@ class MixminionClient:
         self.queue = mixminion.ClientUtils.ClientQueue(os.path.join(userdir, "queue"))
         self.pool = mixminion.ClientUtils.ClientFragmentPool(os.path.join(userdir, "fragments"))
 
-        self.async = mixminion.MMTPClient.AsyncClientHandler()
+        self.async = mixminion.MMTPClient.AsyncClientHandler(
+            optimizeThroughput=self.config['Network']['OptimizeThroughput'])
         self.async_data = {}
         self.out_items = []
         self._current_out_item = None
