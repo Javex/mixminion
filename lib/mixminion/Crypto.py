@@ -670,15 +670,20 @@ class AESCounterPRNG(RNG):
             raise MixFatalError("Exhausted period of PRNG.")
         return prng(self.key,n,c)
 
+class PythonPRNG(RNG):
+
+    def _prng(self, n):
+        return os.urandom(n)
+
+_minion_shared_PRNG = None
+
+
 def getCommonPRNG():
+    global _minion_shared_PRNG
     '''Returns a general-use AESCounterPRNG, initializing it if necessary.'''
-    # We create one PRNG per thread.
-    thisThread = threading.currentThread()
-    try:
-        return thisThread.minion_shared_PRNG
-    except AttributeError:
-        thisThread.minion_shared_PRNG = AESCounterPRNG()
-        return thisThread.minion_shared_PRNG
+    if _minion_shared_PRNG is None:
+        _minion_shared_PRNG = PythonPRNG(1024)
+    return _minion_shared_PRNG
 
 #----------------------------------------------------------------------
 # TRNG implementation
