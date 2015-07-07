@@ -111,17 +111,16 @@ class AsyncSMTP(smtplib.SMTP):
             self._read_data()
 
         if w:
-            if hasattr(self, 'sock') and self.sock:
-                try:
-                    sent = self.sock.send(self._write_buf)
-                    self._write_buf = self._write_buf[sent:]
-                    self.want_read = 1
-                except OSError:
-                    self.close()
-                    raise smtplib.SMTPServerDisconnected('Server not connected')
-            else:
-                raise smtplib.SMTPServerDisconnected('please run connect() first')
-
+            try:
+                sent = self.sock.send(self._write_buf)
+                self._write_buf = self._write_buf[sent:]
+                self.want_read = 1
+            except OSError:
+                self.close()
+                raise smtplib.SMTPServerDisconnected('Server not connected')
+            except socket.error as e:
+                if e.errno != errno.EAGAIN:
+                    raise
         if x:
             raise Exception("SMTP client socket exception: %d" % x)
 
