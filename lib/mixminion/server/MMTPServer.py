@@ -24,7 +24,6 @@ import socket
 import select
 import re
 import sys
-import threading
 import time
 from types import StringType
 
@@ -39,7 +38,6 @@ from mixminion.MMTPClient import PeerCertificateCache, MMTPClientConnection
 from mixminion.NetUtils import getProtocolSupport, AF_INET, AF_INET6
 import mixminion.server.EventStats as EventStats
 from mixminion.Filestore import CorruptedFile
-from mixminion.ThreadUtils import MessageQueue, QueueEmpty
 from mixminion.AsyncUtils import AsyncServer
 
 __all__ = [ 'AsyncServer', 'ListenConnection', 'MMTPServerConnection',
@@ -307,7 +305,6 @@ class MMTPAsyncServer(AsyncServer):
 
         self.serverContext = servercontext
         self.clientContext = _ml.TLSContext_new()
-        self._lock = threading.Lock()
         self.maxClientConnections = config['Outgoing/MMTP'].get(
             'MaxConnections', 16)
         maxbw = config['Server'].get('MaxBandwidth', None)
@@ -352,7 +349,7 @@ class MMTPAsyncServer(AsyncServer):
         self.clientConByAddr = {}
         self.certificateCache = PeerCertificateCache()
         self.dnsCache = None
-        self.msgQueue = MessageQueue()
+        self.msgQueue = []
         self.pendingPackets = []
 
     def connectDNSCache(self, dnsCache):
@@ -364,9 +361,7 @@ class MMTPAsyncServer(AsyncServer):
     def setServerContext(self, servercontext):
         """Change the TLS context used for newly received connections.
            Used to rotate keys."""
-        self._lock.acquire()
         self.serverContext = servercontext
-        self._lock.release()
 
     def getNextTimeoutTime(self, now=None):
         """Return the time at which we next purge connections, if we have
@@ -379,11 +374,10 @@ class MMTPAsyncServer(AsyncServer):
         """helper method.  Creates and registers a new server connection when
            the listener socket gets a hit."""
         # FFFF Check whether incoming IP is allowed!
-        self._lock.acquire()
         try:
             tls = self.serverContext.sock(sock, serverMode=1)
         finally:
-            self._lock.release()
+            pass
         sock.setblocking(0)
 
         addr, port = sock.getpeername()
@@ -451,7 +445,7 @@ class MMTPAsyncServer(AsyncServer):
 
            It is safe to call this function from any thread.
            """
-        self.msgQueue.put((family,addr,port,keyID,deliverable,serverName))
+        self.msgQueue.append((family,addr,port,keyID,deliverable,serverName))
 
     def _sendQueuedPackets(self):
         """Helper function: Find all DNS lookup results and packets in
@@ -467,8 +461,8 @@ class MMTPAsyncServer(AsyncServer):
         while 1:
             try:
                 family,addr,port,keyID,deliverable,serverName = \
-                                                self.msgQueue.get(block=0)
-            except QueueEmpty:
+                                                self.msgQueue.pop(0)
+            except IndexError:
                 return
             self._sendPackets(family,addr,port,keyID,deliverable,serverName)
 

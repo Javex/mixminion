@@ -15,7 +15,6 @@ import math
 import os
 import stat
 import sys
-import threading
 from types import StringType
 
 import mixminion._minionlib as _ml
@@ -768,7 +767,6 @@ class _TrueRNG(RNG):
         """Creates a TrueRNG to retrieve data from our underlying RNG 'n'
            bytes at a time"""
         RNG.__init__(self,n)
-        self.__lock = threading.Lock()
 
     def _prng(self,n):
         "Returns n fresh bytes from our true RNG."
@@ -783,9 +781,7 @@ class _TrueRNG(RNG):
     def getBytes(self, n):
         # We need to synchronize this method, since a single TRNG instance
         # is shared by all threads.
-        self.__lock.acquire()
         b = RNG.getBytes(self, n)
-        self.__lock.release()
         return b
 
 if hasattr(_ml, "win32_get_random_bytes"):

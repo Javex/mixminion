@@ -30,7 +30,6 @@ import signal
 import stat
 import statvfs
 import sys
-import threading
 import time
 import traceback
 
@@ -865,7 +864,6 @@ class Log:
         self.configure(None)
         self.setMinSeverity(minSeverity)
         self.silenceNoted = 0
-        self.__lock = threading.Lock()
 
     def configure(self, config, keepStderr=0):
         """Set up this Log object based on a ServerConfig or ClientConfig
@@ -965,12 +963,8 @@ class Log:
         if _SEVERITIES.get(severity, 100) < self.severity:
             return
 
-        self.__lock.acquire()
-        try:
-            for h in self.handlers:
-                h.write(severity, m)
-        finally:
-            self.__lock.release()
+        for h in self.handlers:
+            h.write(severity, m)
 
     def trace(self, message, *args):
         "Write a trace (hyperverbose) message to the log"

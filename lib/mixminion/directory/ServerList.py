@@ -18,7 +18,6 @@ __all__ = [ 'ServerList' ]
 
 import os
 import time
-import threading
 import mixminion
 
 import mixminion.Config
@@ -106,7 +105,6 @@ class ServerList:
         self.archiveDir = os.path.join(self.baseDir, "archive")
         self.dirArchiveDir = os.path.join(self.baseDir, "dirArchive")
         self.lockfile = Lockfile(os.path.join(self.baseDir, ".lock"))
-        self.rlock = threading.RLock()
         self.servers = {}
         self.serversByNickname = {}
         createPrivateDir(self.serverIDDir)
@@ -474,12 +472,10 @@ class ServerList:
             self.serversByNickname.setdefault(nickname.lower(), []).append(fn)
 
     def _lock(self):
-        self.rlock.acquire()
         self.lockfile.acquire(blocking=1)
 
     def _unlock(self):
         self.lockfile.release()
-        self.rlock.release()
 
 def _moveServer(directory1, directory2, fname):
     """Move a server contained in directory1/fname into directory2, chosing

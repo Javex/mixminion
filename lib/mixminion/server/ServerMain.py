@@ -49,14 +49,9 @@ import os
 import sys
 import signal
 import time
-import threading
 import urllib2
 import timerfd
 from types import *
-# We pull this from mixminion.ThreadUtils just in case somebody still has
-# a copy of the old "mixminion/server/Queue.py" (since renamed to
-# ServerQueue.py)
-from mixminion.ThreadUtils import MessageQueue, ClearableQueue, QueueEmpty
 
 import mixminion.ClientDirectory
 import mixminion.Config
@@ -856,8 +851,6 @@ class MixminionServer(_Scheduler):
         now = time.time()
         # Before we mix, we need to log the hashes to avoid replays.
         try:
-            # There's a threading issue here... in between this sync and the
-            # 'mix' below, nobody should insert into the mix pool.
             self.mixPool.lock()
             self.packetHandler.syncLogs()
 

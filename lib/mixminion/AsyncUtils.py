@@ -3,7 +3,6 @@ import socket
 import select
 import re
 import sys
-import threading
 import time
 from types import StringType
 
@@ -16,7 +15,6 @@ from mixminion.Packet import PACKET_LEN, DIGEST_LEN, IPV4Info, MMTPHostInfo
 from mixminion.NetUtils import getProtocolSupport, AF_INET, AF_INET6
 import mixminion.server.EventStats as EventStats
 from mixminion.Filestore import CorruptedFile
-from mixminion.ThreadUtils import MessageQueue, QueueEmpty
 
 
 class SelectAsyncServer:

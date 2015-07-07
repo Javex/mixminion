@@ -18,7 +18,6 @@ import os
 import re
 import socket
 import stat
-import threading
 import time
 import types
 import urllib2
@@ -35,7 +34,6 @@ from mixminion.Common import LOG, MixError, MixFatalError, UIError, \
 from mixminion.Packet import MBOX_TYPE, SMTP_TYPE, DROP_TYPE, FRAGMENT_TYPE, \
      parseMBOXInfo, parseRelayInfoByType, parseSMTPInfo, ParseError, \
      ServerSideFragmentedMessage
-from mixminion.ThreadUtils import RWLock
 
 # FFFF This should be made configurable and adjustable.
 
@@ -45,6 +43,15 @@ from mixminion.ThreadUtils import RWLock
 
 class GotInvalidDirectoryError(UIError):
     """Raised when we have downloaded an invalid directory."""
+
+
+class LockDummy:
+
+    def acquire(self):
+        pass
+
+    def release(self):
+        pass
 
 class ClientDirectory:
     """A ClientDirectory manages a list of server descriptors, either
@@ -101,11 +108,10 @@ class ClientDirectory:
         self.digestMap = {}
         self.__scanning = 0
         self.__downloading = 0
-        self._lock = RWLock()
         self.config = None
         self.blockedNicknames = {}
         if diskLock is None:
-            self._diskLock = threading.RLock()
+            self._diskLock = LockDummy()
         else:
             self._diskLock = diskLock
 
@@ -130,12 +136,11 @@ class ClientDirectory:
         for lst in sec.get("BlockServers", []):
             for nn in lst:
                 blocked[nn.lower()] = ['*']
-        self._lock.write_in()
         try:
             self.blockedNicknames = blocked
             self.__rebuildTables()
         finally:
-            self._lock.write_out()
+            pass
         self.config = config
 
     def updateDirectory(self, forceDownload=0, timeout=None, now=None):
@@ -154,20 +159,17 @@ class ClientDirectory:
            rescan its servers.  If the operation doesn't complete within
            timeout seconds, raise an error."""
         try:
-            self._lock.write_in()
             if self.__downloading:
                 LOG.info("Download already in progress")
                 return 0
             self.__downloading = 1
         finally:
-            self._lock.write_out()
+            pass
 
         try:
             return self._downloadDirectory(timeout)
         finally:
-            self._lock.write_in()
             self.__downloading = 0
-            self._lock.write_out()
 
 
     def _downloadDirectory(self, timeout=None):
@@ -223,9 +225,7 @@ class ClientDirectory:
                 # Open and validate the directory
                 LOG.info("Validating directory")
 
-                self._lock.read_in()
                 digestMap = self.digestMap
-                self._lock.read_out()
 
                 try:
                     directory = mixminion.ServerInfo.ServerDirectory(
@@ -241,7 +241,6 @@ class ClientDirectory:
                 if fp and mixminion.Crypto.pk_fingerprint(identity) != fp:
                     raise MixFatalError("Bad identity key on directory")
 
-                self._lock.write_in()
                 try:
                     self._diskLock.acquire()
                     try:
@@ -254,7 +253,7 @@ class ClientDirectory:
                     finally:
                         self._diskLock.release()
                 finally:
-                    self._lock.write_out()
+                    pass
 
                 # And regenerate the cache.
                 self.rescan()
@@ -277,9 +276,7 @@ class ClientDirectory:
         if force:
             s_digestMap = {}
         else:
-            self._lock.read_in()
             s_digestMap = self.digestMap.copy()
-            self._lock.read_out()
 
         # Read the servers from the directory.
         gzipFile = os.path.join(self.dir, "dir.gz")
@@ -350,7 +347,6 @@ class ClientDirectory:
 
         # Now, finally, we're done.  Replace the state of this class.
         try:
-            self._lock.write_in()
             self.lastModified = s_lastModified
             self.lastDownload = s_lastDownload
             self.serverList = s_serverList
@@ -366,7 +362,7 @@ class ClientDirectory:
             self.__scanning = 1
             self.__load()
         finally:
-            self._lock.write_out()
+            pass
 
     def __load(self):
         """Helper method. Read the cached parsed descriptors from disk."""
@@ -411,11 +407,7 @@ class ClientDirectory:
 
     def importFromFile(self, filename):
         """Import a new server descriptor stored in 'filename'"""
-        self._lock.write_in()
-        self._lock.write_out()
-        self._lock.read_in()
         digestMap = self.digestMap
-        self._lock.read_out()
 
         contents = readPossiblyGzippedFile(filename)
         info = mixminion.ServerInfo.ServerInfo(string=contents,
@@ -425,7 +417,6 @@ class ClientDirectory:
         lcnickname = nickname.lower()
         identity = info.getIdentity()
 
-        self._lock.read_in()
         try:
             # Make sure that the identity key is consistent with what we know.
             for s, _ in self.serverList:
@@ -450,9 +441,8 @@ class ClientDirectory:
                     [s for s,_ in self.byNickname[lcnickname]]):
                     raise UIError("Server descriptor is already superseded")
         finally:
-            self._lock.read_out()
+            pass
 
-        self._lock.write_in()
         try:
 
             self._diskLock.acquire()
@@ -474,27 +464,24 @@ class ClientDirectory:
             self.lastModified = time.time()
             self.__rebuildTables()
         except:
-            self._lock.write_out()
             raise
 
-        self._lock.write_to_read()
         try:
             self.__save()
         finally:
-            self._lock.read_out()
+            pass
 
     def expungeByNickname(self, nickname):
         """Remove all imported (non-directory) server nicknamed 'nickname'."""
         lcnickname = nickname.lower()
         badSources = {}
         try:
-            self._lock.write_in()
             for info, source in self.serverList:
                 if source[0]=='D' or info.getNickname().lower() != lcnickname:
                     continue
                 badSources[source] = 1
         finally:
-            self._lock.write_out()
+            pass
 
         if badSources:
             self.__removeBySource(badSources)
@@ -535,7 +522,6 @@ class ClientDirectory:
 
            If 'goodOnly' is true, use only recommended servers.
         """
-        self._lock.read_in()
         try:
             result = {}
             if not self.fullServerList:
@@ -584,7 +570,7 @@ class ClientDirectory:
 
             return result
         finally:
-            self._lock.read_out()
+            pass
 
     def __find(self, lst, startAt, endAt):
         """Helper method.  Given a list of (ServerInfo, where), return all
@@ -647,7 +633,6 @@ class ClientDirectory:
            the server with that hostname.  Return None if no such
            server is known, and a slash-separated string if multiple
            servers are known."""
-        self._lock.read_in()
         try:
             nicknames = []
             for desc,where in self.fullServerList:
@@ -659,13 +644,12 @@ class ClientDirectory:
             else:
                 return None
         finally:
-            self._lock.read_out()
+            pass
 
     def getNicknameByKeyID(self, keyid):
         """Given a keyid, return the nickname of the server with that
            keyid.  Return None if no such server is known, and a
            slash-separated string if multiple servers are known."""
-        self._lock.read_in()
         try:
             s = self.byKeyID.get(keyid)
             if not s:
@@ -679,12 +663,11 @@ class ClientDirectory:
             else:
                 return None
         finally:
-            self._lock.read_out()
+            pass
 
     def getKeyIDByNickname(self, nickname):
         """Given the nickname of the server, return the corresponding
            keyid, or None if the nickname is not recognized."""
-        self._lock.read_in()
         try:
             s = self.byNickname.get(nickname.lower())
             if not s:
@@ -692,7 +675,7 @@ class ClientDirectory:
             desc, _ = s[0]
             return desc.getKeyDigest()
         finally:
-            self._lock.read_out()
+            pass
 
     def getNameByRelay(self, routingType, routingInfo):
         """Given a routingType, routingInfo (as string) tuple, return the
@@ -717,13 +700,12 @@ class ClientDirectory:
             startAt = time.time()
         if endAt is None:
             endAt = time.time()+self.DEFAULT_REQUIRED_LIFETIME
-        self._lock.read_in()
         try:
             return self.__excludeBlocked(
                 self.__find(self.serverList, startAt, endAt),
                 isEntry=isEntry, isExit=isExit)
         finally:
-            self._lock.read_out()
+            pass
 
     def clean(self, now=None):
         """Remove all expired or superseded descriptors from DIR/servers."""
@@ -731,7 +713,6 @@ class ClientDirectory:
             now = time.time()
         cutoff = now - 600
 
-        self._lock.read_in()
         try:
             # List of sources to delete.
             badSources = {}
@@ -752,7 +733,7 @@ class ClientDirectory:
                     # from the directory, remove it.
                     badSources[where]=1
         finally:
-            self._lock.read_out()
+            pass
 
         # If we've actually deleted any servers, adjust.
         if badSources:
@@ -761,7 +742,6 @@ class ClientDirectory:
     def __removeBySource(self, badSources):
         """Helper method.  Removes files from imported list by source"""
         try:
-            self._lock.write_in()
             self._diskLock.acquire()
             try:
                 for s in badSources.keys():
@@ -785,14 +765,12 @@ class ClientDirectory:
                 if badSources.has_key(w):
                     del self.digestMap[k]
         except:
-            self._lock.write_out()
             raise
 
-        self._lock.write_to_read()
         try:
             self.__save()
         finally:
-            self._lock.read_out()
+            pass
 
     def getServerInfo(self, name, startAt=None, endAt=None, strict=0):
         """Return the most-recently-published ServerInfo for a given
@@ -814,12 +792,11 @@ class ClientDirectory:
                 LOG.error("Server is not currently valid")
                 return None
 
-        self._lock.read_in()
         try:
             # If it's a nickname, return a serverinfo with that name.
             lst = self.byNickname.get(name.lower())
         finally:
-            self._lock.read_out()
+            pass
 
         if lst is not None:
             sds = self.__find(lst, startAt, endAt)
@@ -863,12 +840,11 @@ class ClientDirectory:
                 startAt, endAt -- A duration of time over which the
                    paths must remain valid.
         """
-        self._lock.read_in()
         try:
             return self._generatePaths(nPaths, pathSpec, exitAddress,
                                        startAt, endAt, prng)
         finally:
-            self._lock.read_out()
+            pass
 
     def _generatePaths(self, nPaths, pathSpec, exitAddress,
                        startAt=None, endAt=None,
@@ -939,11 +915,10 @@ class ClientDirectory:
 
            The path selection algorithm is described in path-spec.txxt
         """
-        self._lock.read_in()
         try:
             return self._getPath(template, startAt, endAt, prng)
         finally:
-            self._lock.read_out()
+            pass
 
     def _getPath(self, template, startAt=None, endAt=None, prng=None):
         """Helper: implement getPath, without getting lock"""
@@ -1043,12 +1018,11 @@ class ClientDirectory:
            If warnUnrecommended is true, give a warning if the user has
            requested any unrecommended servers.
            """
-        self._lock.read_in()
         try:
             return self._validatePath(pathSpec, exitAddress, startAt, endAt,
                                       warnUnrecommended)
         finally:
-            self._lock.read_out()
+            pass
 
     def _validatePath(self, pathSpec, exitAddress, startAt=None, endAt=None,
                      warnUnrecommended=1):
@@ -1136,14 +1110,13 @@ class ClientDirectory:
            the most recently downloaded directory; log a warning if this
            version isn't listed as recommended.
            """
-        self._lock.read_in()
         try:
             if client:
                 allowed = self.clientVersions
             else:
                 allowed = self.serverVersions
         finally:
-            self._lock.read_out()
+            pass
 
         if not allowed: return
 

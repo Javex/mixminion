@@ -8,7 +8,6 @@
 __all__ = [ 'EventLog', 'NilEventLog' ]
 
 import os
-from threading import RLock
 from time import time
 
 from mixminion.Common import formatTime, LOG, previousMidnight, floorDiv, \
@@ -142,8 +141,6 @@ class EventLog(NilEventLog):
     # filename, historyFile: Names of the pickled and long-term event logs.
     # rotateInterval: Interval after which to flush the current statistics
     #     to disk.
-    # _lock: a threading.RLock object that must be held when modifying this
-    #     object.
     # accumulatedTime: number of seconds since last rotation that we have
     #     been logging events.
     # lastSave: last time we saved the file.
@@ -176,16 +173,11 @@ class EventLog(NilEventLog):
         self.rotateInterval = interval
         self.lastSave = time()
         self._setNextRotation()
-        self._lock = RLock()
         self.save()
 
     def save(self, now=None):
         """Write the statistics in this log to disk, rotating if necessary."""
-        try:
-            self._lock.acquire()
-            self._save(now)
-        finally:
-            self._lock.release()
+        self._save(now)
 
     def _save(self, now=None):
         """Implements 'save' method.  For internal use.  Must hold self._lock
@@ -203,16 +195,12 @@ class EventLog(NilEventLog):
 
     def _log(self, event, arg=None):
         try:
-            self._lock.acquire()
+            self.count[event][arg] += 1
+        except KeyError:
             try:
-                self.count[event][arg] += 1
+                self.count[event][arg] = 1
             except KeyError:
-                try:
-                    self.count[event][arg] = 1
-                except KeyError:
-                    raise KeyError("No such event: %r" % event)
-        finally:
-            self._lock.release()
+                raise KeyError("No such event: %r" % event)
 
     def getNextRotation(self):
         return self.nextRotation
@@ -221,11 +209,7 @@ class EventLog(NilEventLog):
         if now is None: now = time()
         if now < self.nextRotation:
             raise MixError("Not ready to rotate event stats")
-        try:
-            self._lock.acquire()
-            self._rotate(now)
-        finally:
-            self._lock.release()
+        self._rotate(now)
 
     def _rotate(self, now=None):
         """Flush all events since the last rotation to the history file,
@@ -253,35 +237,31 @@ class EventLog(NilEventLog):
     def dump(self, f, now=None):
         """Write the current data to a file handle 'f'."""
         if now is None: now = time()
-        try:
-            self._lock.acquire()
-            startTime = self.lastRotation
-            endTime = now
-            print >>f, "========== From %s to %s:" % (formatTime(startTime,1),
-                                                      formatTime(endTime,1))
-            for event in _EVENTS:
-                count = self.count[event]
-                if len(count) == 0:
-                    print >>f, "  %s: 0" % event
-                    continue
-                elif len(count) == 1 and count.keys()[0] is None:
-                    print >>f, "  %s: %s" % (event, count[None])
-                    continue
-                print >>f, "  %s:" % event
-                total = 0
-                args = count.keys()
-                args.sort()
-                length = max([ len(str(arg)) for arg in args ])
-                length = max((length, 10))
-                fmt = "    %"+str(length)+"s: %s"
-                for arg in args:
-                    v = count[arg]
-                    if arg is None: arg = "{Unknown}"
-                    print >>f, fmt % (arg, v)
-                    total += v
-                print >>f, fmt % ("Total", total)
-        finally:
-            self._lock.release()
+        startTime = self.lastRotation
+        endTime = now
+        print >>f, "========== From %s to %s:" % (formatTime(startTime,1),
+                                                  formatTime(endTime,1))
+        for event in _EVENTS:
+            count = self.count[event]
+            if len(count) == 0:
+                print >>f, "  %s: 0" % event
+                continue
+            elif len(count) == 1 and count.keys()[0] is None:
+                print >>f, "  %s: %s" % (event, count[None])
+                continue
+            print >>f, "  %s:" % event
+            total = 0
+            args = count.keys()
+            args.sort()
+            length = max([ len(str(arg)) for arg in args ])
+            length = max((length, 10))
+            fmt = "    %"+str(length)+"s: %s"
+            for arg in args:
+                v = count[arg]
+                if arg is None: arg = "{Unknown}"
+                print >>f, fmt % (arg, v)
+                total += v
+            print >>f, fmt % ("Total", total)
 
     def _setNextRotation(self, now=None):
         """Helper function: calculate the time when we next rotate the log."""

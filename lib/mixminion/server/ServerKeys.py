@@ -16,7 +16,6 @@ import socket
 import re
 import sys
 import time
-import threading
 import urllib
 import urllib2
 
@@ -73,7 +72,6 @@ class ServerKeyring:
 
     def __init__(self, config):
         "Create a ServerKeyring from a config object"
-        self._lock = threading.RLock()
         self.configure(config)
         self._publish_state = None
         self._epoll = None
@@ -571,10 +569,10 @@ class ServerKeyring:
                 desc.getKeyDigest())
 
     def lock(self, blocking=1):
-        return self._lock.acquire(blocking)
+        return True
 
     def unlock(self):
-        self._lock.release()
+        pass
 
 #----------------------------------------------------------------------
 class ServerKeyset:

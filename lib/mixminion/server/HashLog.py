@@ -7,7 +7,6 @@
    PacketHandler to prevent replay attacks."""
 
 import os
-import threading
 import mixminion.Filestore
 from mixminion.Common import MixFatalError, LOG, secureDelete
 from mixminion.Packet import DIGEST_LEN
@@ -20,7 +19,6 @@ __all__ = [ 'HashLog', 'getHashLog', 'deleteHashLog' ]
 # FFFF underlying DB code can't handle.
 
 # Lock to protect _OPEN_HASHLOGS
-_HASHLOG_DICT_LOCK = threading.RLock()
 # Map from (filename) to (keyid,open HashLog). Needed to implement getHashLog.
 _OPEN_HASHLOGS = {}
 
@@ -30,7 +28,6 @@ def getHashLog(filename, keyid):
        implement key rotation: we want to assemble a list of current
        hashlogs, but we can't open the same HashLog database twice at once."""
     try:
-        _HASHLOG_DICT_LOCK.acquire()
         try:
             keyid_orig, hl = _OPEN_HASHLOGS[filename]
             if keyid != keyid_orig:
@@ -42,12 +39,11 @@ def getHashLog(filename, keyid):
             _OPEN_HASHLOGS[filename] = (keyid, hl)
         return hl
     finally:
-        _HASHLOG_DICT_LOCK.release()
+        pass
 
 def deleteHashLog(filename):
     """Remove all files associated with a hashlog."""
     try:
-        _HASHLOG_DICT_LOCK.acquire()
         try:
             _, hl = _OPEN_HASHLOGS[filename]
             LOG.trace("deleteHashLog() removing open hashlog at %s",filename)
@@ -66,7 +62,7 @@ def deleteHashLog(filename):
         remove = [f for f in remove if os.path.exists(f)]
         secureDelete(remove, blocking=1)
     finally:
-        _HASHLOG_DICT_LOCK.release()
+        pass
 
 class HashLog(mixminion.Filestore.BooleanJournaledDBBase):
     """A HashLog is a file containing a list of message digests that we've
@@ -108,12 +104,11 @@ class HashLog(mixminion.Filestore.BooleanJournaledDBBase):
 
     def close(self):
         try:
-            _HASHLOG_DICT_LOCK.acquire()
             mixminion.Filestore.JournaledDBBase.close(self)
             try:
                 del _OPEN_HASHLOGS[self.filename]
             except KeyError:
                 pass
         finally:
-            _HASHLOG_DICT_LOCK.release()
+            pass
 

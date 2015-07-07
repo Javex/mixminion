@@ -20,7 +20,6 @@ import dumbdbm
 import errno
 import os
 import stat
-import threading
 import time
 import whichdb
 
@@ -93,7 +92,6 @@ class BaseStore:
     # Fields:   dir--the location of the file store.
     #           n_entries: the number of complete messages in the queue.
     #                 <0 if we haven't counted yet.
-    #           _lock: A lock that must be held while modifying or accessing
     #                 the queue object.  Filesystem operations are allowed
     #                 without holding the lock, but they must not be visible
     #                 to users of the queue.
@@ -104,7 +102,6 @@ class BaseStore:
            store."""
         secureDelete([]) # Make sure secureDelete is configured. HACK!
 
-        self._lock = threading.RLock()
         self.dir = location
 
         if not os.path.isabs(location):
@@ -123,28 +120,21 @@ class BaseStore:
 
     def lock(self):
         """Prevent access to this filestore from other threads."""
-        self._lock.acquire()
 
     def unlock(self):
         """Release the lock on this filestore."""
-        self._lock.release()
 
     def count(self, recount=0):
         """Returns the number of complete messages in the filestore."""
-        try:
-            self._lock.acquire()
-            if self.n_entries >= 0 and not recount:
-                return self.n_entries
-            else:
-                res = 0
-                for fn in os.listdir(self.dir):
-                    if fn.startswith("msg_"):
-                        res += 1
-                self.n_entries = res
-                return res
-        finally:
-            self._lock.release()
-
+        if self.n_entries >= 0 and not recount:
+            return self.n_entries
+        else:
+            res = 0
+            for fn in os.listdir(self.dir):
+                if fn.startswith("msg_"):
+                    res += 1
+            self.n_entries = res
+            return res
     def pickRandom(self, count=None):
         """Returns a list of 'count' handles to messages in this filestore.
            The messages are chosen randomly, and returned in a random order.
@@ -158,9 +148,7 @@ class BaseStore:
     def getAllMessages(self):
         """Returns handles for all messages currently in the filestore.
            Note: this ordering is not guaranteed to be random."""
-        self._lock.acquire()
         hs = [fn[4:] for fn in os.listdir(self.dir) if fn.startswith("msg_")]
-        self._lock.release()
         return hs
 
     def messageExists(self, handle):
@@ -182,17 +170,13 @@ class BaseStore:
 
     def removeAll(self, secureDeleteFn=None):
         """Removes all messages from this filestore."""
-        try:
-            self._lock.acquire()
-            for m in os.listdir(self.dir):
-                if m[:4] in ('inp_', 'msg_'):
-                    self._changeState(m[4:], m[:3], "rmv")
-                elif m[:4] in ('inpm_', 'meta_'):
-                    self._changeState(m[5:], m[:4], "rmvm")
-            self.n_entries = 0
-            self.cleanQueue(secureDeleteFn)
-        finally:
-            self._lock.release()
+        for m in os.listdir(self.dir):
+            if m[:4] in ('inp_', 'msg_'):
+                self._changeState(m[4:], m[:3], "rmv")
+            elif m[:4] in ('inpm_', 'meta_'):
+                self._changeState(m[5:], m[:4], "rmvm")
+        self.n_entries = 0
+        self.cleanQueue(secureDeleteFn)
 
     def getMessagePath(self, handle):
         """Given a handle for an existing message, return the name of the
@@ -273,7 +257,6 @@ class BaseStore:
         """Helper method: changes the state of message 'handle' from 's1'
            to 's2', and changes the internal count."""
         try:
-            self._lock.acquire()
             try:
                 replaceFile(os.path.join(self.dir, s1+"_"+handle),
                             os.path.join(self.dir, s2+"_"+handle))
@@ -292,7 +275,7 @@ class BaseStore:
             elif s1 != 'msg' and s2 == 'msg':
                 self.n_entries += 1
         finally:
-            self._lock.release()
+            pass
 
 class StringStoreMixin:
     """Combine the 'StringStoreMixin' class with a BaseStore in order
@@ -303,10 +286,9 @@ class StringStoreMixin:
         """Given a message handle, returns the contents of the corresponding
            message."""
         try:
-            self._lock.acquire()
             return readFile(os.path.join(self.dir, "msg_"+handle), 1)
         finally:
-            self._lock.release()
+            pass
 
     def queueMessage(self, contents):
         """Creates a new message in the filestore whose contents are
@@ -328,7 +310,6 @@ class ObjectStoreMixin:
            CorruptedFile.
            """
         try:
-            self._lock.acquire()
             f = open(os.path.join(self.dir, "msg_"+handle), 'rb')
             try:
                 res = cPickle.load(f)
@@ -340,7 +321,7 @@ class ObjectStoreMixin:
                 self._preserveCorrupted(handle)
                 raise CorruptedFile()
         finally:
-            self._lock.release()
+            pass
 
     def queueObject(self, object):
         """Queue an object using cPickle, and return a handle to that
@@ -396,7 +377,6 @@ class BaseMetadataStore(BaseStore):
            cache.  If any object is missing its metadata, create metadata for
            it by invoking newDataFn(handle)."""
         try:
-            self._lock.acquire()
             self._metadata_cache = {}
             for h in self.getAllMessages():
                 try:
@@ -407,7 +387,7 @@ class BaseMetadataStore(BaseStore):
                 except CorruptedFile:
                     continue
         finally:
-            self._lock.release()
+            pass
 
     def getMetadata(self, handle):
         """Return the metadata associated with a given handle.  If the
@@ -416,7 +396,6 @@ class BaseMetadataStore(BaseStore):
         if not os.path.exists(fname):
             raise KeyError(handle)
         try:
-            self._lock.acquire()
             try:
                 return self._metadata_cache[handle]
             except KeyError:
@@ -433,12 +412,11 @@ class BaseMetadataStore(BaseStore):
             self._metadata_cache[handle] = res
             return res
         finally:
-            self._lock.release()
+            pass
 
     def setMetadata(self, handle, object):
         """Change the metadata associated with a given handle."""
         try:
-            self._lock.acquire()
             fname = os.path.join(self.dir, "inpm_"+handle)
             f = os.fdopen(os.open(fname, _NEW_FILE_FLAGS, 0600), "wb")
             cPickle.dump(object, f, 1)
@@ -446,11 +424,10 @@ class BaseMetadataStore(BaseStore):
             self._metadata_cache[handle] = object
             return handle
         finally:
-            self._lock.release()
+            pass
 
     def _doRemove(self, handle, newState):
         try:
-            self._lock.acquire()
             # Remove the message before the metadata, so we don't have
             # a message without metadata.
             BaseStore._doRemove(self, handle, newState)
@@ -462,7 +439,7 @@ class BaseMetadataStore(BaseStore):
             except KeyError:
                 pass
         finally:
-            self._lock.release()
+            pass
 
 class StringMetadataStoreMixin(StringStoreMixin):
     """Add this mixin class to a BaseMetadataStore in order to get a
@@ -544,7 +521,6 @@ class DBBase:
        To use this class for non-string keys or values, override the
        _{en|de}code{Key|Value} methods."""
     ## Fields:
-    # _lock -- A threading.RLock to protect access to database.
     # filename -- The name of the underlying database file.  Note that some
     #       database implementations (such as dumdbm) create multiple files,
     #       using <filename> as a prefix.
@@ -553,7 +529,6 @@ class DBBase:
     def __init__(self, filename, purpose=""):
         """Create a DBBase object for a database stored in 'filename',
            creating the underlying database if needed."""
-        self._lock = threading.RLock()
         self.filename = filename
         parent = os.path.split(filename)[0]
         createPrivateDir(parent)
@@ -636,41 +611,36 @@ class DBBase:
 
     def getItem(self, k):
         try:
-            self._lock.acquire()
             return self._decodeVal(self.log[self._encodeKey(k)])
         finally:
-            self._lock.release()
+            pass
 
     def setItem(self, k, v):
-        self._lock.acquire()
         try:
             self.log[self._encodeKey(k)] = self._encodeVal(v)
         finally:
-            self._lock.release()
+            pass
 
     def delItem(self, k):
         try:
-            self._lock.acquire()
             del self.log[self._encodeKey(k)]
         finally:
-            self._lock.release()
+            pass
 
     def sync(self):
         """Flush all pending changes to disk"""
-        self._lock.acquire()
         try:
             self._syncLog()
         finally:
-            self._lock.release()
+            pass
 
     def close(self):
         """Release resources associated with this database."""
-        self._lock.acquire()
         try:
             self.log.close()
             self.log = None
         finally:
-            self._lock.release()
+            pass
 
 # Flags for use when opening the journal.
 _JOURNAL_OPEN_FLAGS = os.O_WRONLY|os.O_CREAT|getattr(os,'O_SYNC',0)|getattr(os,'O_BINARY',0)
@@ -733,13 +703,12 @@ class JournaledDBBase(DBBase):
     def getItem(self, k):
         jk = self._jEncodeKey(k)
         assert len(jk) == self.klen
-        self._lock.acquire()
         try:
             if self.journal.has_key(jk):
                 return self._jDecodeVal(self.journal[jk])
             return self.getItemNoJournal(k)
         finally:
-            self._lock.release()
+            pass
 
     def keys(self):
         return map(self._decodeKey,  self.log.keys()) + \
@@ -750,7 +719,6 @@ class JournaledDBBase(DBBase):
         jv = self._jEncodeVal(v)
         assert len(jk) == self.klen
         if self.vlen: assert len(jv) == self.vlen
-        self._lock.acquire()
         try:
             self.journal[jk] = jv
             os.write(self.journalFile, jk)
@@ -759,7 +727,7 @@ class JournaledDBBase(DBBase):
             if len(self.journal) > self.MAX_JOURNAL:
                 self.sync()
         finally:
-            self._lock.release()
+            pass
 
     def delItem(self, k):
         deletedOne = 0
@@ -778,7 +746,6 @@ class JournaledDBBase(DBBase):
             raise KeyError
 
     def sync(self):
-        self._lock.acquire()
         try:
             for jk in self.journal.keys():
                 ek = self._encodeKey(self._jDecodeKey(jk))
@@ -790,17 +757,16 @@ class JournaledDBBase(DBBase):
                                        _JOURNAL_OPEN_FLAGS|os.O_TRUNC, 0600)
             self.journal = {}
         finally:
-            self._lock.release()
+            pass
 
     def close(self):
         try:
-            self._lock.acquire()
             self.sync()
             self.log.close()
             self.log = None
             os.close(self.journalFile)
         finally:
-            self._lock.release()
+            pass
 
 class BooleanJournaledDBBase(JournaledDBBase):
     """Specialization of JournaledDBBase that encodes a set of keys, mapping

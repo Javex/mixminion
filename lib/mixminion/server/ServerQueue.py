@@ -11,7 +11,6 @@ import time
 import stat
 import sys
 import cPickle
-import threading
 
 import mixminion.Filestore
 
@@ -201,7 +200,6 @@ class DeliveryQueue:
     #      the metadata are instances of _DeliveryState.
     #   retrySchedule -- a list of intervals at which delivery of messages
     #      should be reattempted, as described in "setRetrySchedule".
-    #   _lock -- a reference to the RLock used to control access to the
     #      store.
     def __init__(self, location, retrySchedule=None, now=None, name=None):
         """Create a new DeliveryQueue object that stores its files in
@@ -210,7 +208,6 @@ class DeliveryQueue:
            name used in log messages."""
         self.store = mixminion.Filestore.ObjectMetadataStore(
             location,create=1,scrub=1)
-        self._lock = self.store._lock
         if name is None:
             self.qname = os.path.split(location)[1]
         else:
@@ -241,11 +238,10 @@ class DeliveryQueue:
                 30 minutes.
         """
         try:
-            self._lock.acquire()
             self.retrySchedule = schedule[:]
             self._rebuildNextAttempt(now)
         finally:
-            self._lock.release()
+            pass
 
     def _rescan(self, now=None):
         """Helper: Rebuild the internal state of this queue from the
@@ -253,12 +249,11 @@ class DeliveryQueue:
            _rebuildNextAttempt must be called to recalculate our
            delivery schedule."""
         try:
-            self._lock.acquire()
             self.store.loadAllMetadata(lambda h: _DeliveryState())
             self._rebuildNextAttempt(now)
             self._repOk()
         finally:
-            self._lock.release()
+            pass
 
     def getAllMessages(self):
         """Return handles for all messages in the store."""
@@ -272,7 +267,6 @@ class DeliveryQueue:
         """Helper: Reconstruct self.nextAttempt from self.retrySchedule and
            self.deliveryState.
 
-           Callers must hold self._lock.
         """
         if self.retrySchedule is None:
             rs = [0]
@@ -289,7 +283,6 @@ class DeliveryQueue:
         # XXXX Later in the release cycle, we should call this *even* less.
         # XXXX It adds ~8-9ms on my laptop for ~400 messages
         try:
-            self._lock.acquire()
 
             allHandles = self.store.getAllMessages()
             allHandles.sort()
@@ -297,7 +290,7 @@ class DeliveryQueue:
             dsHandles.sort()
             assert allHandles == dsHandles
         finally:
-            self._lock.release()
+            pass
 
     def queueDeliveryMessage(self, msg, address=None, now=None):
         """Schedule a message for delivery.
@@ -305,14 +298,13 @@ class DeliveryQueue:
         """
         assert self.retrySchedule is not None
         try:
-            self._lock.acquire()
             ds = _DeliveryState(now,None,address)
             ds.setNextAttempt(self.retrySchedule, now)
             handle = self.store.queueObjectAndMetadata(msg, ds)
             LOG.trace("DeliveryQueue got message %s for %s",
                       handle, self.qname)
         finally:
-            self._lock.release()
+            pass
 
         return handle
 
@@ -331,13 +323,12 @@ class DeliveryQueue:
            changing the schedule while the system is down can make calling
            this method useful."""
         try:
-            self._lock.acquire()
             #XXXX
             for h, ds in self.store._metadata_cache.items():
                 if ds.isRemovable():
                     self.removeMessage(h)
         finally:
-            self._lock.release()
+            pass
 
     def sendReadyMessages(self, async, now=None):
         """Sends all messages which are not already being sent, and which
@@ -349,7 +340,6 @@ class DeliveryQueue:
         LOG.trace("DeliveryQueue checking for deliverable messages in %s",
                   self.qname)
         try:
-            self._lock.acquire()
             messages = []
             for h in self.store._metadata_cache.keys():
                 try:
@@ -373,7 +363,7 @@ class DeliveryQueue:
                 else:
                     LOG.trace("     [%s] is not yet ready for redelivery", h)
         finally:
-            self._lock.release()
+            pass
 
         if messages:
             self._deliverMessages(messages, async)
@@ -402,11 +392,10 @@ class DeliveryQueue:
 
     def removeAll(self, secureDeleteFn=None):
         try:
-            self._lock.acquire()
             self.store.removeAll(secureDeleteFn)
             self.cleanQueue()
         finally:
-            self._lock.release()
+            pass
 
     def deliverySucceeded(self, handle):
         """Removes a message from the outgoing queue.  This method
@@ -428,7 +417,6 @@ class DeliveryQueue:
         LOG.trace("DeliveryQueue failed to deliver %s from %s",
                   handle, self.qname)
         try:
-            self._lock.acquire()
             try:
                 ds = self.store.getMetadata(handle)
             except KeyError:
@@ -476,7 +464,7 @@ class DeliveryQueue:
             LOG.trace("     (Giving up on %s)", handle)
             self.removeMessage(handle)
         finally:
-            self._lock.release()
+            pass
 
 class TimedMixPool(mixminion.Filestore.ObjectStore):
     """A TimedMixPool holds a group of files, and returns some of them

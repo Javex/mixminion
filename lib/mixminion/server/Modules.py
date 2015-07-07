@@ -19,7 +19,6 @@ import re
 import sys
 import smtplib
 import socket
-import threading
 import time
 
 if sys.version_info[:2] >= (2,3):
@@ -248,25 +247,24 @@ class Delivery:
     def __init__(self, moduleManager):
         """Create a new DeliveryThread."""
         self.moduleManager = moduleManager
-        self.event = threading.Event()
-        self.__stoppingevent = threading.Event()
+        self.event = False
+        self.__stoppingevent = False
 
     def beginSending(self):
         """Tell this thread that there are messages ready to be sent."""
-        self.event.set()
+        self.event = True
 
     def shutdown(self):
         """Tell this thread to shut down after sending further messages."""
         LOG.info("Telling delivery thread to shut down.")
-        self.__stoppingevent.set()
-        self.event.set()
+        self.__stoppingevent = True
+        self.event = True
 
     def run(self):
         try:
             while 1:
-                self.event.wait()
-                self.event.clear()
-                stop = self.__stoppingevent.isSet()
+                self.event = False
+                stop = self.__stoppingevent
                 if stop:
                     LOG.info("Delivery thread shutting down.")
                     self.moduleManager.close()
@@ -554,7 +552,6 @@ class FragmentModule(DeliveryModule):
         self.maxMessageSize = None
         self.maxInterval = None
         self.maxFragments = None
-        self.lock = threading.RLock()
     def usesDecodingHandle(self): return 0
     def getConfigSyntax(self):
         return { "Delivery/Fragmented" :
@@ -617,27 +614,24 @@ class FragmentModule(DeliveryModule):
     def getExitTypes(self):
         return [ mixminion.Packet.FRAGMENT_TYPE ]
     def createDeliveryQueue(self, queueDir):
-        self.lock.acquire()
         try:
             self.close()
             self._queue = FragmentDeliveryQueue(self, queueDir, self.manager)
             return self._queue
         finally:
-            self.lock.release()
+            pass
     def sync(self):
-        self.lock.acquire()
         try:
             self._queue.pool.sync()
         finally:
-            self.lock.release()
+            pass
     def close(self):
-        self.lock.acquire()
         try:
             if self._queue:
                 self._queue.pool.close()
                 self._queue = None
         finally:
-            self.lock.release()
+            pass
     def processMessage(self, packet):
         raise AssertionError
 
@@ -654,7 +648,6 @@ class FragmentDeliveryQueue:
         self.directory = directory
         self.manager = manager
         self.pool = mixminion.Fragments.FragmentPool(self.directory)
-        self.lock = self.module.lock
 
     def getPriority(self):
         # We want to make sure that fragmented messages get reassembled
@@ -676,21 +669,18 @@ class FragmentDeliveryQueue:
         # Should be instance of FragmentPayload.
         payload = packet.getDecodedPayload()
         assert payload is not None
-        self.lock.acquire()
         try:
             self.pool.addFragment(payload)
         finally:
-            self.lock.release()
+            pass
 
     def cleanQueue(self, deleteFn=None):
         try:
-            self.lock.acquire()
             self.pool.cleanQueue(deleteFn)
         finally:
-            self.lock.release()
+            pass
 
     def sendReadyMessages(self, async):
-        self.lock.acquire()
         try:
             self.pool.unchunkMessages()
             ready = self.pool.listReadyMessages()
@@ -715,7 +705,7 @@ class FragmentDeliveryQueue:
             cutoff = previousMidnight(time.time()) - self.module.maxInterval
             self.pool.expireMessages(cutoff)
         finally:
-            self.lock.release()
+            pass
 
 class _FragmentedDeliveryMessage:
     """Helper class: obeys the interface of mixminion.server.PacketHandler.
